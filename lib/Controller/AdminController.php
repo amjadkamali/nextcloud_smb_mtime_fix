@@ -85,10 +85,19 @@ class AdminController extends Controller {
             return $denied;
         }
         return $this->runSafely(function () {
-            // 0 (or missing/invalid) means unlimited - see MtimeFixService::scanForMismatches().
+            $cursorParam = $this->request->getParam('cursor', null);
+            $cursor = is_array($cursorParam) ? $cursorParam : [];
+
+            // 0 (or missing/invalid) means unlimited total mismatches - see MtimeFixService::scanForMismatchesBatch().
             $limit = (int)$this->request->getParam('limit', '0');
-            $mismatches = $this->service->scanForMismatches(max($limit, 0));
-            return new JSONResponse(['mismatches' => $mismatches]);
+
+            $batchSize = (int)$this->request->getParam('batchSize', '200');
+            if ($batchSize <= 0) {
+                $batchSize = 200;
+            }
+
+            $result = $this->service->scanForMismatchesBatch($cursor, max($limit, 0), $batchSize);
+            return new JSONResponse($result);
         });
     }
 

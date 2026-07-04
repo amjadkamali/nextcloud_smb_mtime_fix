@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.6
+- "Scan for mismatches" now runs in bounded batches (200 files examined per
+  request) following a resumable cursor, instead of one request walking
+  the entire share. Results appear incrementally as each batch completes,
+  the button doubles as a Stop control, and a scan that fails partway
+  still keeps whatever it found. Previously this was the one remaining
+  unbounded-request risk in the app - it had the same
+  `max_execution_time`/proxy-timeout exposure Apply used to have, and was
+  arguably worse since the mismatch-count limit only capped *results*, not
+  how many files got examined getting there.
+- Log level defaults changed: dry-run/success messages now default to
+  Info (was Warning), errors now default to Error (was Warning) - so a
+  fresh install's two categories are meaningfully different out of the
+  box instead of both starting at the same level.
+
 ## 0.4.5
 - "Update selected files" now applies in batches of 25 instead of one
   request for the whole selection, with a live progress count. Fixed rows

@@ -53,19 +53,27 @@
         'status' => $l->t('Dry-run output & success messages'),
         'errors' => $l->t('Errors'),
     ];
+    $levelNames = [
+        0 => $l->t('Debug'),
+        1 => $l->t('Info'),
+        2 => $l->t('Warning'),
+        3 => $l->t('Error'),
+        4 => $l->t('Critical'),
+    ];
     ?>
     <table class="grid" style="max-width: 700px;">
         <tbody>
             <?php foreach ($_['logLevels'] as $category => $level): ?>
+            <?php $defaultLevel = $_['logLevelDefaults'][$category] ?? 2; ?>
             <tr>
                 <td><?php p($logLevelLabels[$category] ?? $category); ?></td>
                 <td>
                     <select id="smb-mtime-fix-log-level-<?php p($category); ?>" class="select smb-mtime-fix-log-level-select" data-category="<?php p($category); ?>">
-                        <option value="0" <?php p((int)$level === 0 ? 'selected' : ''); ?>><?php p($l->t('Debug')); ?></option>
-                        <option value="1" <?php p((int)$level === 1 ? 'selected' : ''); ?>><?php p($l->t('Info')); ?></option>
-                        <option value="2" <?php p((int)$level === 2 ? 'selected' : ''); ?>><?php p($l->t('Warning (default)')); ?></option>
-                        <option value="3" <?php p((int)$level === 3 ? 'selected' : ''); ?>><?php p($l->t('Error')); ?></option>
-                        <option value="4" <?php p((int)$level === 4 ? 'selected' : ''); ?>><?php p($l->t('Critical')); ?></option>
+                        <?php foreach ($levelNames as $value => $name): ?>
+                        <option value="<?php p($value); ?>" <?php p((int)$level === $value ? 'selected' : ''); ?>>
+                            <?php p($value === $defaultLevel ? $name . ' ' . $l->t('(default)') : $name); ?>
+                        </option>
+                        <?php endforeach; ?>
                     </select>
                 </td>
             </tr>
@@ -78,7 +86,7 @@
 
     <h3><?php p($l->t('Find files affected before this app was installed')); ?></h3>
     <p class="settings-hint">
-        <?php p($l->t('Scans your configured SMB mounts and compares each file\'s intended mtime against what\'s actually stamped on the share. This is independent of the dry-run toggle above - nothing is changed until you review the list and click "Update selected files" below.')); ?>
+        <?php p($l->t('Scans your configured SMB mounts and compares each file\'s intended mtime against what\'s actually stamped on the share. Runs in small batches so it can\'t time out on a large share - you can stop it partway and keep whatever it found so far. Independent of the dry-run toggle above - nothing is changed until you review the list and click "Update selected files" below.')); ?>
     </p>
 
     <p>

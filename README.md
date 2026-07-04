@@ -78,9 +78,13 @@ are also always written to PHP's native error log as a backstop.
   real on-share mtime) has some version-to-version drift across Samba/
   smbclient releases. Spot-check with `smbclient //host/share -U
   user%pass -c 'allinfo "path/to/file"'` if scan results look off.
-- The retroactive scan shells out to `smbclient` once per file checked, so
-  it can be slow on shares with many files - use the optional limit field
-  on the admin page for a quicker, bounded test run.
+- The retroactive scan shells out to `smbclient` once per file checked. It
+  runs in small, bounded batches (following a resumable cursor) so a single
+  request can't run long enough to hit PHP's `max_execution_time` or a
+  reverse proxy's timeout regardless of share size - you can also stop it
+  partway and keep whatever it's found so far. It's still inherently slow
+  on shares with many files; use the optional limit field to cap total
+  mismatches found for a quicker test run.
 - Only admin-configured (global) SMB mounts are covered; personal
   (user-added) SMB external storage isn't scanned or auto-fixed.
 

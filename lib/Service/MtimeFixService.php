@@ -16,7 +16,7 @@ use Psr\Log\LoggerInterface;
 /**
  * Single place for all SMB-mtime-correction logic. Used by the real-time
  * event listener (fixMtime) and by the admin-page scan/apply endpoints
- * (scanForMismatches / applyMismatch). Keeping the smbclient invocation and
+ * (scanForMismatchesBatch / applyMismatch). Keeping the smbclient invocation and
  * cache-patching logic in one method (applyFix) means both code paths stay
  * behaviorally identical.
  */
@@ -202,11 +202,21 @@ class MtimeFixService {
         self::MESSAGE_TYPE_UNEXPECTED => self::CATEGORY_ERRORS,
     ];
 
+    /** Default level per category if the admin hasn't overridden it yet. */
+    private const CATEGORY_DEFAULT_LEVEL = [
+        self::CATEGORY_STATUS => self::SEVERITY_INFO,
+        self::CATEGORY_ERRORS => self::SEVERITY_ERROR,
+    ];
+
+    public function getCategoryDefaultLevel(string $category): int {
+        return self::CATEGORY_DEFAULT_LEVEL[$category] ?? self::SEVERITY_WARNING;
+    }
+
     public function getCategoryLogLevel(string $category): int {
         if (!in_array($category, self::CATEGORIES, true)) {
             $category = self::CATEGORY_STATUS;
         }
-        return (int)$this->config->getAppValue(self::APP_ID, $category . '_log_level', (string)self::SEVERITY_WARNING);
+        return (int)$this->config->getAppValue(self::APP_ID, $category . '_log_level', (string)$this->getCategoryDefaultLevel($category));
     }
 
     public function setCategoryLogLevel(string $category, int $level): void {
@@ -214,7 +224,7 @@ class MtimeFixService {
             return;
         }
         if (!in_array($level, self::APP_LOG_LEVELS, true)) {
-            $level = self::SEVERITY_WARNING;
+            $level = $this->getCategoryDefaultLevel($category);
         }
         $this->config->setAppValue(self::APP_ID, $category . '_log_level', (string)$level);
     }
@@ -440,36 +450,49 @@ class MtimeFixService {
     // ---------------------------------------------------------------
 
     /**
-     * Scans every configured SMB mount's filecache entries and compares the
-     * cached (intended) mtime against what's actually stamped on the share.
-     * Returns a flat list an admin can review before applying anything.
+     * Scans a bounded batch of filecache entries across configured SMB
+     * mounts, resuming from $cursor if given. Meant to be called
+     * repeatedly from the admin page - each call does a small, bounded
+     * amount of work (at most $batchSize files examined), so a single
+     * request can never run long enough to hit PHP's max_execution_time
+     * or a reverse proxy's read timeout, no matter how large the share is.
      *
-     * PERFORMANCE NOTE: this shells out to smbclient once per file to read
-     * its real mtime, which is slow on shares with many files. $limit, when
-     * greater than 0, caps how many mismatches are collected - not how many
-     * files get examined along the way, so a small limit can still take a
-     * while if mismatches are sparse. 0 (the default) means unlimited -
-     * this is meant to be run on demand from the admin page, not on a
-     * tight schedule.
+     * $cursor tracks position as {mountIndex, afterFileId} against a
+     * freshly-fetched, stably-sorted (by mount id) list of SMB mounts each
+     * call - so if mounts are added/removed mid-scan the position could
+     * shift slightly, but won't error out; worst case is missing or
+     * re-checking a few files at the boundary, which a re-scan cleans up.
      *
-     * @return list<array{storageId:string, mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime:int}>
+     * PERFORMANCE NOTE: this still shells out to smbclient once per file
+     * examined - $batchSize bounds how much of that happens per request,
+     * not the total work across a full scan (the caller loops, following
+     * the returned cursor, until it comes back null).
+     *
+     * @param array{mountIndex?:int, afterFileId?:int} $cursor
+     * @return array{
+     *     mismatches: list<array{storageId:string, mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime:int}>,
+     *     cursor: array{mountIndex:int, afterFileId:int}|null,
+     *     examined: int
+     * }
      */
-    public function scanForMismatches(int $limit = 0): array {
+    public function scanForMismatchesBatch(array $cursor, int $limit, int $batchSize): array {
         $mismatches = [];
+        $examined = 0;
 
         try {
-            $allStorages = $this->globalStoragesService->getAllStorages();
+            $mounts = $this->getOrderedSmbMounts();
         } catch (\Throwable $e) {
-            $this->logUnexpectedError('scanForMismatches/getAllStorages', $e);
-            return $mismatches;
+            $this->logUnexpectedError('scanForMismatchesBatch/getAllStorages', $e);
+            return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => 0];
         }
 
-        foreach ($allStorages as $mountConfig) {
-            try {
-                if ($mountConfig->getBackend()->getIdentifier() !== 'smb') {
-                    continue;
-                }
+        $mountIndex = max(0, (int)($cursor['mountIndex'] ?? 0));
+        $afterFileId = max(0, (int)($cursor['afterFileId'] ?? 0));
 
+        while ($mountIndex < count($mounts) && $examined < $batchSize) {
+            $mountConfig = $mounts[$mountIndex];
+
+            try {
                 $options = $mountConfig->getBackendOptions();
                 $host = $options['host'] ?? '';
                 $share = $options['share'] ?? '';
@@ -481,49 +504,83 @@ class MtimeFixService {
                 $storageId = $this->buildStorageId($user, $host, $share, $options['root'] ?? '/');
                 $numericId = $this->getNumericStorageId($storageId);
                 if ($numericId === null) {
+                    $mountIndex++;
+                    $afterFileId = 0;
                     continue;
                 }
 
-                foreach ($this->iterateCacheEntries($numericId) as $entry) {
-                    if ($entry['mimetype'] === 'httpd/unix-directory') {
+                $remaining = $batchSize - $examined;
+                $rows = $this->fetchCacheEntriesPage($numericId, $afterFileId, $remaining);
+
+                foreach ($rows as $row) {
+                    $examined++;
+                    $afterFileId = (int)$row['fileid'];
+
+                    if ($row['mimetype'] === 'httpd/unix-directory') {
                         continue;
                     }
 
-                    $actualMtime = $this->queryActualMtime($host, $share, $user, $password, $domain, $root, $entry['path']);
+                    $actualMtime = $this->queryActualMtime($host, $share, $user, $password, $domain, $root, $row['path']);
                     if ($actualMtime === null) {
                         continue;
                     }
 
-                    if (abs($actualMtime - (int)$entry['mtime']) > self::MISMATCH_THRESHOLD_SECONDS) {
+                    if (abs($actualMtime - (int)$row['mtime']) > self::MISMATCH_THRESHOLD_SECONDS) {
                         $mismatches[] = [
                             'storageId' => $storageId,
                             'mountId' => $mountConfig->getId(),
-                            'fileId' => (int)$entry['fileid'],
-                            'path' => $entry['path'],
-                            'cachedMtime' => (int)$entry['mtime'],
+                            'fileId' => (int)$row['fileid'],
+                            'path' => $row['path'],
+                            'cachedMtime' => (int)$row['mtime'],
                             'actualMtime' => $actualMtime,
                         ];
 
                         if ($limit > 0 && count($mismatches) >= $limit) {
-                            return $mismatches;
+                            // Hit the admin's requested cap on total
+                            // mismatches - stop the whole scan here, not
+                            // just this mount.
+                            return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => $examined];
                         }
                     }
                 }
+
+                if (count($rows) < $remaining) {
+                    // Fewer rows than asked for means this mount is exhausted.
+                    $mountIndex++;
+                    $afterFileId = 0;
+                }
             } catch (\Throwable $e) {
-                // One mount's processing blowing up (unexpected option
-                // shape, a files_external internal changing, etc.)
-                // shouldn't take down the whole scan - log it and move on
-                // to the next mount.
-                $this->logUnexpectedError('scanForMismatches/mount', $e);
-                continue;
+                // One mount's processing blowing up shouldn't take down the
+                // whole scan - log it, skip to the next mount.
+                $this->logUnexpectedError('scanForMismatchesBatch/mount', $e);
+                $mountIndex++;
+                $afterFileId = 0;
             }
         }
 
-        return $mismatches;
+        $done = $mountIndex >= count($mounts);
+        $nextCursor = $done ? null : ['mountIndex' => $mountIndex, 'afterFileId' => $afterFileId];
+
+        return ['mismatches' => $mismatches, 'cursor' => $nextCursor, 'examined' => $examined];
     }
 
     /**
-     * Applies a single mismatch found by scanForMismatches(). Called only
+     * @return list<\OCA\Files_External\Lib\StorageConfig>
+     */
+    private function getOrderedSmbMounts(): array {
+        $mounts = [];
+        foreach ($this->globalStoragesService->getAllStorages() as $mountConfig) {
+            if ($mountConfig->getBackend()->getIdentifier() === 'smb') {
+                $mounts[] = $mountConfig;
+            }
+        }
+        // Stable order across requests is what makes the cursor meaningful.
+        usort($mounts, static fn ($a, $b) => $a->getId() <=> $b->getId());
+        return $mounts;
+    }
+
+    /**
+     * Applies a single mismatch found by scanForMismatchesBatch(). Called only
      * from the admin "Update selected files" button - i.e. after the admin
      * has already seen the concrete file list and confirmed. This always
      * performs a real write regardless of the dry-run toggle, because the
@@ -679,33 +736,40 @@ class MtimeFixService {
     }
 
     /**
-     * @return \Generator<array{fileid:int|string, path:string, mtime:int|string, mimetype:?string}>
+     * Fetches up to $maxRows filecache rows for one storage, ordered by
+     * fileid ascending, starting just after $afterFileId. Used by
+     * scanForMismatchesBatch() to pull one bounded page of work per
+     * request instead of iterating an entire (possibly huge) mount in one
+     * go.
+     *
+     * @return list<array{fileid:int|string, path:string, mtime:int|string, mimetype:?string}>
      */
-    private function iterateCacheEntries(int $numericStorageId): \Generator {
+    private function fetchCacheEntriesPage(int $numericStorageId, int $afterFileId, int $maxRows): array {
         try {
             $qb = $this->db->getQueryBuilder();
             $qb->select('fc.fileid', 'fc.path', 'fc.mtime', 'mt.mimetype')
                 ->from('filecache', 'fc')
                 ->leftJoin('fc', 'mimetypes', 'mt', $qb->expr()->eq('fc.mimetype', 'mt.id'))
-                ->where($qb->expr()->eq('fc.storage', $qb->createNamedParameter($numericStorageId, IQueryBuilder::PARAM_INT)));
+                ->where($qb->expr()->eq('fc.storage', $qb->createNamedParameter($numericStorageId, IQueryBuilder::PARAM_INT)))
+                ->andWhere($qb->expr()->gt('fc.fileid', $qb->createNamedParameter($afterFileId, IQueryBuilder::PARAM_INT)))
+                ->orderBy('fc.fileid', 'ASC')
+                ->setMaxResults(max(1, $maxRows));
 
             $result = $qb->executeQuery();
+            $rows = [];
+            while ($row = $result->fetch()) {
+                $rows[] = $row;
+            }
+            $result->closeCursor();
+            return $rows;
         } catch (\Throwable $e) {
             // Raw query against oc_filecache - same schema-drift risk as
-            // getNumericStorageId(). Fail safe: yield nothing for this
-            // mount rather than crashing the whole scan.
-            $this->logUnexpectedError('iterateCacheEntries', $e);
-            return;
-        }
-
-        try {
-            while ($row = $result->fetch()) {
-                yield $row;
-            }
-        } catch (\Throwable $e) {
-            $this->logUnexpectedError('iterateCacheEntries (fetch)', $e);
-        } finally {
-            $result->closeCursor();
+            // getNumericStorageId(). Fail safe: return nothing for this
+            // page rather than crashing the whole scan; the caller treats
+            // an empty/short page as "this mount is exhausted" and moves
+            // on, so this can't spin forever.
+            $this->logUnexpectedError('fetchCacheEntriesPage', $e);
+            return [];
         }
     }
 

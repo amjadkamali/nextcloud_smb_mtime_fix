@@ -21,13 +21,16 @@ class AdminSettings implements ISettings {
         Util::addStyle(Application::APP_ID, 'admin');
 
         $logLevels = [];
+        $logLevelDefaults = [];
         foreach (MtimeFixService::CATEGORIES as $category) {
             $logLevels[$category] = $this->service->getCategoryLogLevel($category);
+            $logLevelDefaults[$category] = $this->service->getCategoryDefaultLevel($category);
         }
 
         return new TemplateResponse(Application::APP_ID, 'admin', [
             'dryRunState' => $this->service->getDryRunState(),
             'logLevels' => $logLevels,
+            'logLevelDefaults' => $logLevelDefaults,
         ], '');
     }
 

@@ -96,49 +96,95 @@
 
         // --- scan -------------------------------------------------------------
 
+        // Each request only examines a bounded batch of files (server-side
+        // default 200) and returns a cursor to resume from - so no single
+        // request can run long enough to hit PHP's max_execution_time or a
+        // reverse proxy's read timeout, no matter how large the share is.
+        // The browser just keeps following the cursor until the server
+        // reports there's nothing left (or the admin clicks Stop).
+        var scanCancelled = false;
+
         scanBtn.addEventListener('click', function () {
-            scanBtn.disabled = true;
-            scanStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Scanning… this can take a while on large shares.');
+            if (scanBtn.dataset.mode === 'stop') {
+                scanCancelled = true;
+                return;
+            }
+
+            scanBtn.textContent = t('nextcloud_smb_mtime_fix', 'Stop scanning');
+            scanBtn.dataset.mode = 'stop';
             resultsWrap.style.display = 'none';
+            resultsBody.innerHTML = '';
+            lastMismatches = [];
+            scanCancelled = false;
 
             var limitRaw = scanLimitInput ? scanLimitInput.value.trim() : '';
-            var limitQuery = '';
+            var limit = 0;
             if (limitRaw !== '') {
                 var parsedLimit = parseInt(limitRaw, 10);
                 if (parsedLimit > 0) {
-                    limitQuery = '?limit=' + parsedLimit;
+                    limit = parsedLimit;
                 }
             }
 
-            jsonFetch(apiUrl('/scan' + limitQuery), { method: 'GET' })
-                .then(function (data) {
-                    lastMismatches = data.mismatches || [];
-                    renderResults(lastMismatches);
-                    scanStatus.textContent = lastMismatches.length
-                        ? ' ' + t('nextcloud_smb_mtime_fix', '{count} mismatched file(s) found.', { count: lastMismatches.length })
-                        : ' ' + t('nextcloud_smb_mtime_fix', 'No mismatches found.');
-                })
-                .catch(function () {
-                    scanStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Scan failed - check the server log.');
-                })
-                .finally(function () {
-                    scanBtn.disabled = false;
+            var examinedTotal = 0;
+
+            function finish(statusText) {
+                scanStatus.textContent = ' ' + statusText;
+                scanBtn.textContent = t('nextcloud_smb_mtime_fix', 'Scan for mismatches');
+                scanBtn.dataset.mode = 'scan';
+            }
+
+            function runBatch(cursor) {
+                if (scanCancelled) {
+                    finish(t('nextcloud_smb_mtime_fix', 'Stopped. {examined} files checked, {count} mismatch(es) found so far.', {
+                        examined: examinedTotal, count: lastMismatches.length,
+                    }));
+                    return;
+                }
+
+                scanStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Scanning… {examined} files checked, {count} mismatch(es) found so far.', {
+                    examined: examinedTotal, count: lastMismatches.length,
                 });
+
+                jsonFetch(apiUrl('/scan'), {
+                    method: 'POST',
+                    body: JSON.stringify({ cursor: cursor, limit: limit, batchSize: 200 }),
+                })
+                    .then(function (data) {
+                        examinedTotal += data.examined || 0;
+                        (data.mismatches || []).forEach(function (m) {
+                            lastMismatches.push(m);
+                            appendResultRow(m, lastMismatches.length - 1);
+                        });
+
+                        if (data.cursor && !scanCancelled) {
+                            runBatch(data.cursor);
+                        } else {
+                            finish(lastMismatches.length
+                                ? t('nextcloud_smb_mtime_fix', '{examined} files checked, {count} mismatched file(s) found.', { examined: examinedTotal, count: lastMismatches.length })
+                                : t('nextcloud_smb_mtime_fix', '{examined} files checked, no mismatches found.', { examined: examinedTotal }));
+                        }
+                    })
+                    .catch(function () {
+                        finish(t('nextcloud_smb_mtime_fix', 'Scan failed - check the server log. {examined} files checked, {count} mismatch(es) found before the failure.', {
+                            examined: examinedTotal, count: lastMismatches.length,
+                        }));
+                    });
+            }
+
+            runBatch(null);
         });
 
-        function renderResults(mismatches) {
-            resultsBody.innerHTML = '';
-            mismatches.forEach(function (m, i) {
-                var tr = document.createElement('tr');
-                tr.dataset.path = m.path;
-                tr.innerHTML =
-                    '<td><input type="checkbox" class="smb-mtime-fix-row" checked data-index="' + i + '" /></td>' +
-                    '<td>' + escapeHtml(m.path) + '</td>' +
-                    '<td>' + formatDate(m.cachedMtime) + '</td>' +
-                    '<td>' + formatDate(m.actualMtime) + '</td>';
-                resultsBody.appendChild(tr);
-            });
-            resultsWrap.style.display = mismatches.length ? '' : 'none';
+        function appendResultRow(m, index) {
+            var tr = document.createElement('tr');
+            tr.dataset.path = m.path;
+            tr.innerHTML =
+                '<td><input type="checkbox" class="smb-mtime-fix-row" checked data-index="' + index + '" /></td>' +
+                '<td>' + escapeHtml(m.path) + '</td>' +
+                '<td>' + formatDate(m.cachedMtime) + '</td>' +
+                '<td>' + formatDate(m.actualMtime) + '</td>';
+            resultsBody.appendChild(tr);
+            resultsWrap.style.display = '';
         }
 
         // Removes a single fixed file's row from the table (and marks it null
