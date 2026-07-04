@@ -162,12 +162,37 @@ class AdminController extends Controller {
         return $this->runSafely(function () {
             $mountId = (int)$this->request->getParam('mountId', '0');
             $path = trim((string)$this->request->getParam('path', ''));
+            $quote = (string)$this->request->getParam('quote', 'double');
+            $quoteChar = $quote === 'single' ? "'" : '"';
 
             if ($mountId <= 0 || $path === '') {
                 return new JSONResponse(['ok' => false, 'message' => 'mountId and path are required'], Http::STATUS_BAD_REQUEST);
             }
 
-            return new JSONResponse($this->service->debugAllinfo($mountId, $path));
+            return new JSONResponse($this->service->debugAllinfo($mountId, $path, $quoteChar));
+        });
+    }
+
+    /**
+     * Runs a fully arbitrary smbclient `-c` command against one mount, for
+     * iterating on quoting/escaping strategies (or anything else) without
+     * needing a new app release each time - see
+     * MtimeFixService::debugRawCommand() for the important caveats
+     * (not read-only, doesn't auto-prepend the mount's root).
+     */
+    public function debugRawCommand(): JSONResponse {
+        if ($denied = $this->requireAdmin()) {
+            return $denied;
+        }
+        return $this->runSafely(function () {
+            $mountId = (int)$this->request->getParam('mountId', '0');
+            $command = (string)$this->request->getParam('command', '');
+
+            if ($mountId <= 0 || trim($command) === '') {
+                return new JSONResponse(['ok' => false, 'message' => 'mountId and command are required'], Http::STATUS_BAD_REQUEST);
+            }
+
+            return new JSONResponse($this->service->debugRawCommand($mountId, $command));
         });
     }
 }

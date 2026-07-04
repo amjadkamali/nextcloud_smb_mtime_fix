@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.4
+- "Test allinfo parsing" under Advanced can now try single-quoting the
+  path instead of the double-quoting the real scan/apply code uses today
+  - for testing whether smbclient's own command-string parser handles
+    paths with spaces differently depending on quote style (real-world
+    reports suggest it might: `NT_STATUS_OBJECT_NAME_NOT_FOUND`/
+  `NT_STATUS_OBJECT_PATH_NOT_FOUND` on paths containing spaces, in a
+  pattern consistent with the path getting split apart before reaching
+  the server). The exact command tried is now shown in the result.
+- New "Run a raw smbclient command" tool under Advanced: type any -c
+  command and run it against a selected mount with its stored
+  credentials. Lets quoting/escaping strategies (or anything else) be
+  tried directly from the admin page while diagnosing an issue, without
+  needing a new app release for every variant to test. Not read-only -
+  clearly labeled as such, since it will run whatever is typed, including
+  destructive sub-commands.
+
+## 0.5.3
+- Documentation update: the `allinfo` write_time parsing has now been
+  confirmed against a live server via the Advanced diagnostic tool - the
+  plain human-readable form with a trailing timezone abbreviation (e.g.
+  `Sat Jul  4 23:02:35 2026 UTC`) parses correctly, including honoring the
+  timezone label to produce the right absolute instant. The
+  epoch-in-parentheses variant remains a defensive fallback but is still
+  unconfirmed in the wild. No code changes, just replacing "unverified"
+  language with what's actually been checked.
+
 ## 0.5.2
 - New collapsed "Advanced" section on the admin page with a "Test allinfo
   parsing" tool: pick a mount and a file path, and it runs the exact same
