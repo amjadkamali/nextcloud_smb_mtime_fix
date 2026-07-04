@@ -130,6 +130,7 @@
             resultsBody.innerHTML = '';
             mismatches.forEach(function (m, i) {
                 var tr = document.createElement('tr');
+                tr.dataset.path = m.path;
                 tr.innerHTML =
                     '<td><input type="checkbox" class="smb-mtime-fix-row" checked data-index="' + i + '" /></td>' +
                     '<td>' + escapeHtml(m.path) + '</td>' +
@@ -140,6 +141,26 @@
             resultsWrap.style.display = mismatches.length ? '' : 'none';
         }
 
+        // Removes a single fixed file's row from the table (and marks it null
+        // in lastMismatches so it's skipped if the admin clicks Apply again
+        // without re-scanning). Leaves failed rows in place so they stay
+        // visible and selectable for a retry.
+        function removeResultRow(path) {
+            var idx = lastMismatches.findIndex(function (m) {
+                return m && m.path === path;
+            });
+            if (idx !== -1) {
+                lastMismatches[idx] = null;
+            }
+            var row = resultsBody.querySelector('tr[data-path="' + CSS.escape(path) + '"]');
+            if (row) {
+                row.remove();
+            }
+            if (!resultsBody.querySelector('tr')) {
+                resultsWrap.style.display = 'none';
+            }
+        }
+
         selectAll.addEventListener('change', function () {
             resultsBody.querySelectorAll('.smb-mtime-fix-row').forEach(function (cb) {
                 cb.checked = selectAll.checked;
@@ -147,6 +168,15 @@
         });
 
         // --- apply --------------------------------------------------------------
+
+        // A single request holding thousands of files would run one
+        // smbclient process per file, sequentially, inside one PHP request -
+        // easy to exceed PHP's max_execution_time or a reverse proxy's read
+        // timeout long before it finishes, and an all-or-nothing failure
+        // wouldn't tell you how far it got. Chunking keeps each HTTP request
+        // short, shows real progress, and means a hiccup only costs you the
+        // current chunk - already-applied files stay applied.
+        var APPLY_CHUNK_SIZE = 25;
 
         applyBtn.addEventListener('click', function () {
             var selected = [];
@@ -170,26 +200,57 @@
             }
 
             applyBtn.disabled = true;
-            applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Applying…');
 
-            jsonFetch(apiUrl('/apply'), {
-                method: 'POST',
-                body: JSON.stringify({ items: selected }),
-            })
-                .then(function (data) {
-                    var results = data.results || [];
-                    var okCount = results.filter(function (r) { return r.ok; }).length;
-                    applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{ok}/{total} updated. Re-scan to confirm.', {
-                        ok: okCount,
-                        total: results.length,
+            var chunks = [];
+            for (var i = 0; i < selected.length; i += APPLY_CHUNK_SIZE) {
+                chunks.push(selected.slice(i, i + APPLY_CHUNK_SIZE));
+            }
+
+            var total = selected.length;
+            var totalOk = 0;
+            var totalDone = 0;
+            var hadRequestFailure = false;
+
+            function runChunk(chunkIndex) {
+                if (chunkIndex >= chunks.length) {
+                    applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{ok}/{total} updated.{note}', {
+                        ok: totalOk,
+                        total: total,
+                        note: hadRequestFailure ? ' ' + t('nextcloud_smb_mtime_fix', '(one or more batches failed - check the server log; unfixed files are still listed below)') : '',
                     });
-                })
-                .catch(function () {
-                    applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Apply failed - check the server log.');
-                })
-                .finally(function () {
                     applyBtn.disabled = false;
+                    return;
+                }
+
+                var chunk = chunks[chunkIndex];
+                applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Applying… {done}/{total}', {
+                    done: totalDone,
+                    total: total,
                 });
+
+                jsonFetch(apiUrl('/apply'), {
+                    method: 'POST',
+                    body: JSON.stringify({ items: chunk }),
+                })
+                    .then(function (data) {
+                        var results = data.results || [];
+                        results.forEach(function (r) {
+                            if (r.ok) {
+                                totalOk++;
+                                removeResultRow(r.path);
+                            }
+                        });
+                    })
+                    .catch(function () {
+                        hadRequestFailure = true;
+                    })
+                    .finally(function () {
+                        totalDone += chunk.length;
+                        runChunk(chunkIndex + 1);
+                    });
+            }
+
+            runChunk(0);
         });
     });
 })();

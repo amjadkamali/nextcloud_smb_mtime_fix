@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.5
+- "Update selected files" now applies in batches of 25 instead of one
+  request for the whole selection, with a live progress count. Fixed rows
+  disappear from the list as each batch completes; failed ones stay
+  visible for a retry. This avoids a single request holding thousands of
+  files running long enough to hit PHP's `max_execution_time` or a reverse
+  proxy's read timeout, and means a mid-batch failure only costs you that
+  batch instead of the whole thing.
+- Added a 30-second per-operation timeout (`smbclient -t`) to both
+  `smbclient` invocations, so a hung/slow connection to the SMB server no
+  longer has an unbounded wait - on the real-time path that previously
+  meant a stuck user upload with no way out short of killing the PHP
+  worker.
+
 ## 0.4.4
 - **Reliability**: every risky operation (raw SQL against `oc_filecache`/
   `oc_storages`, calls into `files_external` internals, `exec()`) is now

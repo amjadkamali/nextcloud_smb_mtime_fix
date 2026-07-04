@@ -28,6 +28,12 @@ class MtimeFixService {
     // Only flag it as a real mismatch past this threshold.
     private const MISMATCH_THRESHOLD_SECONDS = 2;
 
+    // Passed to smbclient's own -t/--timeout flag. Without this, a single
+    // hung/slow connection to the SMB server has no bound - on the
+    // real-time path that means a stuck user upload; on a large retroactive
+    // apply batch it means one bad file can stall everything behind it.
+    private const SMBCLIENT_TIMEOUT_SECONDS = 30;
+
     private const DRY_RUN_STATES = ['on', 'temp_off', 'off'];
     private const TEMP_OFF_CACHE_KEY = 'dry_run_temp_off';
 
@@ -601,8 +607,9 @@ class MtimeFixService {
         }
 
         $cmd = sprintf(
-            'smbclient %s -U %s -c %s 2>&1',
+            'smbclient %s -t %d -U %s -c %s 2>&1',
             escapeshellarg('//' . $host . '/' . $share),
+            self::SMBCLIENT_TIMEOUT_SECONDS,
             escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
             escapeshellarg(sprintf('utimes "%s" -1 -1 %s -1', $smbPath, $smbTime))
         );
@@ -743,8 +750,9 @@ class MtimeFixService {
         }
 
         $cmd = sprintf(
-            'smbclient %s -U %s -c %s 2>&1',
+            'smbclient %s -t %d -U %s -c %s 2>&1',
             escapeshellarg('//' . $host . '/' . $share),
+            self::SMBCLIENT_TIMEOUT_SECONDS,
             escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
             escapeshellarg(sprintf('allinfo "%s"', $smbPath))
         );
