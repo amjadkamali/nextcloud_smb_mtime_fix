@@ -3,6 +3,8 @@
 A Nextcloud app that corrects file modification times on SMB/CIFS external
 storage mounts.
 
+Claude heavy.
+
 ## The problem
 
 Nextcloud's SMB external storage backend silently ignores the mtime it's
