@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>nextcloud_smb_mtime_fix</id>
+    <name>SMB Mtime Fix</name>
+    <summary>Corrects mtimes on SMB external storage in real time</summary>
+    <description>Nextcloud's SMB external storage backend silently ignores the
+    mtime it's told to write, so uploaded files get stamped with upload time
+    instead of their real timestamp. This app listens for writes to SMB
+    mounts and pushes the correct mtime back to the share via smbclient
+    immediately, then patches the cache's storage_mtime so the ETag is never
+    recomputed - meaning synced clients never see a spurious "file changed"
+    and never redownload. An admin settings page also lets you scan existing
+    SMB mounts for files that were already affected before this app was
+    installed, review the list, and apply fixes on demand. A dry-run mode
+    (enabled by default) lets you verify behavior via the log before letting
+    the app write anything.</description>
+    <version>0.4.3</version>
+    <licence>mit</licence>
+    <author>amjadkamali</author>
+    <namespace>SmbMtimeFix</namespace>
+    <category>files</category>
+    <dependencies>
+        <nextcloud min-version="27" max-version="34"/>
+    </dependencies>
+    <settings>
+        <admin>OCA\SmbMtimeFix\Settings\AdminSettings</admin>
+        <admin-section>OCA\SmbMtimeFix\Settings\AdminSection</admin-section>
+    </settings>
+</info>

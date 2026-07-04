@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# PHP tooling (if you add composer later for dev-only deps like phpcs/psalm)
+/vendor/
+composer.lock
+
+# Build artifacts
+*.tar.gz
+*.zip

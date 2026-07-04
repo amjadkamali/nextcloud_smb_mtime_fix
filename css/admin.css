@@ -1,0 +1,25 @@
+#smb-mtime-fix-settings hr {
+    margin: 1.5em 0;
+}
+
+#smb-mtime-fix-settings #smb-mtime-fix-results {
+    margin-top: 1em;
+}
+
+#smb-mtime-fix-settings table.grid {
+    width: 100%;
+    max-width: 900px;
+    margin-bottom: 1em;
+}
+
+#smb-mtime-fix-settings table.grid th,
+#smb-mtime-fix-settings table.grid td {
+    padding: 0.4em 0.6em;
+    text-align: left;
+}
+
+#smb-mtime-fix-scan-status,
+#smb-mtime-fix-apply-status {
+    margin-left: 0.5em;
+    opacity: 0.8;
+}
