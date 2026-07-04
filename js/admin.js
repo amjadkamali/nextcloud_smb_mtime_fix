@@ -142,13 +142,26 @@
                     return;
                 }
 
+                // The server has no memory between batch calls, so it can
+                // only cap mismatches found *within one call* - the
+                // cumulative stop has to happen here. We pass only the
+                // remaining budget so a single batch can't overshoot past
+                // the limit either.
+                if (limit > 0 && lastMismatches.length >= limit) {
+                    finish(t('nextcloud_smb_mtime_fix', '{examined} files checked, {count} mismatched file(s) found (limit reached).', {
+                        examined: examinedTotal, count: lastMismatches.length,
+                    }));
+                    return;
+                }
+                var remainingLimit = limit > 0 ? Math.max(limit - lastMismatches.length, 1) : 0;
+
                 scanStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Scanning… {examined} files checked, {count} mismatch(es) found so far.', {
                     examined: examinedTotal, count: lastMismatches.length,
                 });
 
                 jsonFetch(apiUrl('/scan'), {
                     method: 'POST',
-                    body: JSON.stringify({ cursor: cursor, limit: limit, batchSize: 200 }),
+                    body: JSON.stringify({ cursor: cursor, limit: remainingLimit, batchSize: 200 }),
                 })
                     .then(function (data) {
                         examinedTotal += data.examined || 0;
@@ -157,7 +170,11 @@
                             appendResultRow(m, lastMismatches.length - 1);
                         });
 
-                        if (data.cursor && !scanCancelled) {
+                        if (limit > 0 && lastMismatches.length >= limit) {
+                            finish(t('nextcloud_smb_mtime_fix', '{examined} files checked, {count} mismatched file(s) found (limit reached).', {
+                                examined: examinedTotal, count: lastMismatches.length,
+                            }));
+                        } else if (data.cursor && !scanCancelled) {
                             runBatch(data.cursor);
                         } else {
                             finish(lastMismatches.length
@@ -213,16 +230,64 @@
             });
         });
 
-        // --- apply --------------------------------------------------------------
+        // --- shared: apply a list of items in bounded, sequential chunks ------
 
         // A single request holding thousands of files would run one
         // smbclient process per file, sequentially, inside one PHP request -
         // easy to exceed PHP's max_execution_time or a reverse proxy's read
         // timeout long before it finishes, and an all-or-nothing failure
         // wouldn't tell you how far it got. Chunking keeps each HTTP request
-        // short, shows real progress, and means a hiccup only costs you the
-        // current chunk - already-applied files stay applied.
+        // short and means a hiccup only costs you the current chunk -
+        // already-applied files stay applied. Shared by the manual "Update
+        // selected files" button and the automatic scan-and-fix flow below,
+        // so both get this for free and can't drift apart.
         var APPLY_CHUNK_SIZE = 25;
+
+        function applyItemsInChunks(items, onProgress, onComplete) {
+            var chunks = [];
+            for (var i = 0; i < items.length; i += APPLY_CHUNK_SIZE) {
+                chunks.push(items.slice(i, i + APPLY_CHUNK_SIZE));
+            }
+
+            var okCount = 0;
+            var failCount = 0;
+            var hadRequestFailure = false;
+
+            function runChunk(chunkIndex) {
+                if (chunkIndex >= chunks.length) {
+                    onComplete({ ok: okCount, failed: failCount, hadRequestFailure: hadRequestFailure });
+                    return;
+                }
+
+                var chunk = chunks[chunkIndex];
+                jsonFetch(apiUrl('/apply'), {
+                    method: 'POST',
+                    body: JSON.stringify({ items: chunk }),
+                })
+                    .then(function (data) {
+                        (data.results || []).forEach(function (r) {
+                            if (r.ok) {
+                                okCount++;
+                                removeResultRow(r.path);
+                            } else {
+                                failCount++;
+                            }
+                        });
+                    })
+                    .catch(function () {
+                        hadRequestFailure = true;
+                        failCount += chunk.length;
+                    })
+                    .finally(function () {
+                        onProgress(okCount, failCount, chunkIndex + 1, chunks.length);
+                        runChunk(chunkIndex + 1);
+                    });
+            }
+
+            runChunk(0);
+        }
+
+        // --- apply (manual, from the reviewed results list) --------------------
 
         applyBtn.addEventListener('click', function () {
             var selected = [];
@@ -246,57 +311,154 @@
             }
 
             applyBtn.disabled = true;
-
-            var chunks = [];
-            for (var i = 0; i < selected.length; i += APPLY_CHUNK_SIZE) {
-                chunks.push(selected.slice(i, i + APPLY_CHUNK_SIZE));
-            }
-
             var total = selected.length;
-            var totalOk = 0;
-            var totalDone = 0;
-            var hadRequestFailure = false;
 
-            function runChunk(chunkIndex) {
-                if (chunkIndex >= chunks.length) {
-                    applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{ok}/{total} updated.{note}', {
-                        ok: totalOk,
+            applyItemsInChunks(
+                selected,
+                function (ok, failed, chunksDone, chunksTotal) {
+                    applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Applying… {done}/{total}', {
+                        done: ok + failed,
                         total: total,
-                        note: hadRequestFailure ? ' ' + t('nextcloud_smb_mtime_fix', '(one or more batches failed - check the server log; unfixed files are still listed below)') : '',
+                    });
+                },
+                function (result) {
+                    applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{ok}/{total} updated.{note}', {
+                        ok: result.ok,
+                        total: total,
+                        note: result.hadRequestFailure ? ' ' + t('nextcloud_smb_mtime_fix', '(one or more batches failed - check the server log; unfixed files are still listed below)') : '',
                     });
                     applyBtn.disabled = false;
+                }
+            );
+        });
+
+        // --- scan & fix all automatically ---------------------------------------
+
+        // Chains the same bounded scan batches used above with the same
+        // chunked apply helper, so this inherits both timeout fixes for
+        // free: no single request ever holds more than one scan batch
+        // (200 files examined) or one apply chunk (25 files written).
+        var autoBtn = document.getElementById('smb-mtime-fix-auto');
+        var autoStatus = document.getElementById('smb-mtime-fix-auto-status');
+        var autoCancelled = false;
+        var backgroundRunActive = false;
+
+        function setManualControlsDisabled(disabled) {
+            scanBtn.disabled = disabled;
+            applyBtn.disabled = disabled;
+        }
+
+        autoBtn.addEventListener('click', function () {
+            if (autoBtn.dataset.mode === 'stop') {
+                autoCancelled = true;
+                return;
+            }
+
+            if (backgroundRunActive) {
+                // Guards against double-starting from this same browser tab
+                // (e.g. a stray double-click). Doesn't protect against a
+                // second admin or a second tab starting one at the same
+                // time - only a server-side lock could do that, which this
+                // doesn't have.
+                return;
+            }
+
+            var confirmMsg = t(
+                'nextcloud_smb_mtime_fix',
+                'This scans every configured SMB mount and immediately fixes every mismatch it finds, with no review step - it always writes for real, regardless of the dry-run setting above. Make sure you\'ve already confirmed a normal scan and manual "Update selected files" looks correct on your SMB server. Continue?'
+            );
+            if (!window.confirm(confirmMsg)) {
+                return;
+            }
+
+            backgroundRunActive = true;
+            autoCancelled = false;
+            autoBtn.textContent = t('nextcloud_smb_mtime_fix', 'Stop');
+            autoBtn.dataset.mode = 'stop';
+            setManualControlsDisabled(true);
+
+            var limitRaw = scanLimitInput ? scanLimitInput.value.trim() : '';
+            var fixLimit = 0;
+            if (limitRaw !== '') {
+                var parsedLimit = parseInt(limitRaw, 10);
+                if (parsedLimit > 0) {
+                    fixLimit = parsedLimit;
+                }
+            }
+
+            var examined = 0;
+            var fixed = 0;
+            var failed = 0;
+
+            function finish(note) {
+                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{examined} files checked, {fixed} fixed, {failed} failed.{note}', {
+                    examined: examined, fixed: fixed, failed: failed,
+                    note: note ? ' ' + note : '',
+                });
+                autoBtn.textContent = t('nextcloud_smb_mtime_fix', 'Scan & fix all automatically');
+                autoBtn.dataset.mode = 'scan';
+                backgroundRunActive = false;
+                setManualControlsDisabled(false);
+            }
+
+            function runScanBatch(cursor) {
+                if (autoCancelled) {
+                    finish(t('nextcloud_smb_mtime_fix', '(stopped)'));
                     return;
                 }
 
-                var chunk = chunks[chunkIndex];
-                applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Applying… {done}/{total}', {
-                    done: totalDone,
-                    total: total,
+                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed so far.', {
+                    examined: examined, fixed: fixed,
                 });
 
-                jsonFetch(apiUrl('/apply'), {
+                jsonFetch(apiUrl('/scan'), {
+                    // Always unlimited per scan batch - the fix-count limit
+                    // is enforced below, across the whole run, not per batch.
                     method: 'POST',
-                    body: JSON.stringify({ items: chunk }),
+                    body: JSON.stringify({ cursor: cursor, limit: 0, batchSize: 200 }),
                 })
-                    .then(function (data) {
-                        var results = data.results || [];
-                        results.forEach(function (r) {
-                            if (r.ok) {
-                                totalOk++;
-                                removeResultRow(r.path);
+                    .then(function (scanData) {
+                        examined += scanData.examined || 0;
+                        var found = scanData.mismatches || [];
+
+                        if (!found.length) {
+                            if (scanData.cursor && !autoCancelled) {
+                                runScanBatch(scanData.cursor);
+                            } else {
+                                finish();
                             }
-                        });
+                            return;
+                        }
+
+                        applyItemsInChunks(
+                            found,
+                            function (ok, failCount) {
+                                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed so far.', {
+                                    examined: examined, fixed: fixed + ok,
+                                });
+                            },
+                            function (result) {
+                                fixed += result.ok;
+                                failed += result.failed;
+
+                                if (fixLimit > 0 && fixed >= fixLimit) {
+                                    finish();
+                                    return;
+                                }
+                                if (scanData.cursor && !autoCancelled) {
+                                    runScanBatch(scanData.cursor);
+                                } else {
+                                    finish();
+                                }
+                            }
+                        );
                     })
                     .catch(function () {
-                        hadRequestFailure = true;
-                    })
-                    .finally(function () {
-                        totalDone += chunk.length;
-                        runChunk(chunkIndex + 1);
+                        finish(t('nextcloud_smb_mtime_fix', '(scan request failed - check the server log)'));
                     });
             }
 
-            runChunk(0);
+            runScanBatch(null);
         });
     });
 })();

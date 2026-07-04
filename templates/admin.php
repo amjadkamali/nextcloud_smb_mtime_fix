@@ -115,4 +115,16 @@
         </button>
         <span id="smb-mtime-fix-apply-status"></span>
     </div>
+
+    <hr/>
+
+    <h4><?php p($l->t('Or: scan and fix everything automatically')); ?></h4>
+    <p class="settings-hint">
+        <?php p($l->t('Skips the review step above entirely - every mismatch found gets fixed immediately as the scan runs, in small batches, with no pause to look at any of them first. Always writes for real, the same as clicking "Update selected files" does. Make sure you\'ve confirmed a normal scan and manual apply looks correct on your SMB server before trusting this with your whole share. Uses the limit field above, if set, as a cap on total files fixed.')); ?>
+    </p>
+    <button id="smb-mtime-fix-auto" class="button">
+        <?php p($l->t('Scan & fix all automatically')); ?>
+    </button>
+    <span id="smb-mtime-fix-auto-status"></span>
 </div>
+

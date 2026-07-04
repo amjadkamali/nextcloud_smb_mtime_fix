@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.8
+- Fixed: the manual "Scan for mismatches" limit field didn't actually cap
+  the total across a multi-batch scan. The backend has no memory between
+  batch calls, so its per-call limit check only capped mismatches found
+  *within one 200-file batch* - if mismatches were sparse, each batch
+  would find fewer than the limit on its own, never trigger the stop
+  condition, and the scan would keep going well past the number you set.
+  The running total is now tracked client-side, with only the remaining
+  budget passed to each batch call, so it stops exactly at the number
+  requested regardless of how batches happen to split up.
+
+## 0.4.7
+- New "Scan & fix all automatically" button: chains the existing bounded
+  scan batches and chunked apply into one loop, so mismatches get fixed
+  as they're found with no manual review step. Gated behind a confirm
+  dialog that calls out the tradeoff (no per-file review, relies on the
+  same `allinfo`-parsing caveat as the manual flow), can be stopped
+  mid-run, and disables the manual Scan/Apply buttons while it's running
+  to avoid overlapping runs in the same tab. Reuses the same batch sizes
+  as the manual flows (200 examined / 25 applied per request), so it
+  carries no new timeout risk despite running unattended for longer.
+
 ## 0.4.6
 - "Scan for mismatches" now runs in bounded batches (200 files examined per
   request) following a resumable cursor, instead of one request walking
