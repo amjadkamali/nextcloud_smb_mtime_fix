@@ -86,7 +86,7 @@
 
     <h3><?php p($l->t('Find files affected before this app was installed')); ?></h3>
     <p class="settings-hint">
-        <?php p($l->t('Scans your configured SMB mounts and compares each file\'s intended mtime against what\'s actually stamped on the share. Runs in small batches so it can\'t time out on a large share - you can stop it partway and keep whatever it found so far. Both "Update selected files" and "Scan & fix all automatically" below respect the dry-run setting above: with dry-run on, they only log what they\'d do.')); ?>
+        <?php p($l->t('Scans your configured SMB mounts and compares each file\'s intended mtime against what\'s actually stamped on the share. Runs in small batches so it can\'t time out on a large share - you can stop it partway and keep whatever it found so far. Both actions respect the dry-run setting above.')); ?>
     </p>
 
     <p>

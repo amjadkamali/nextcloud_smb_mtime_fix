@@ -316,7 +316,7 @@
 
             var confirmMsg = t(
                 'nextcloud_smb_mtime_fix',
-                'Update mtimes for {count} file(s) on the SMB share? With dry-run on (see the setting above), this only logs what it would do - turn dry-run off first if you want it to write for real.',
+                'Update mtimes for {count} file(s) on the SMB share?',
                 { count: selected.length }
             );
             if (!window.confirm(confirmMsg)) {
@@ -385,7 +385,7 @@
 
             var confirmMsg = t(
                 'nextcloud_smb_mtime_fix',
-                'This scans the selected mount(s) and immediately applies every mismatch it finds, with no review step. It respects the dry-run setting above - with dry-run on, it only logs what it would do; turn dry-run off first if you want it to write for real. Make sure you\'ve already confirmed a normal scan and manual "Update selected files" looks correct on your SMB server. Continue?'
+                'This scans the selected mount(s) and immediately applies every mismatch it finds, with no review step. Make sure you\'ve already confirmed a normal scan and manual "Update selected files" looks correct on your SMB server. Continue?'
             );
             if (!window.confirm(confirmMsg)) {
                 return;
