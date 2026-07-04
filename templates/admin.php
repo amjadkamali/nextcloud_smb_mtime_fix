@@ -129,5 +129,46 @@
         </button>
         <span id="smb-mtime-fix-apply-status"></span>
     </div>
+
+    <hr/>
+
+    <details id="smb-mtime-fix-advanced">
+        <summary style="cursor: pointer; font-weight: bold;"><?php p($l->t('Advanced')); ?></summary>
+        <div style="margin-top: 0.75em;">
+            <h4><?php p($l->t('Test allinfo parsing')); ?></h4>
+            <?php if ($_['smbMounts'] === []): ?>
+            <p class="settings-hint">
+                <?php p($l->t('No SMB mounts configured yet - nothing to test against.')); ?>
+            </p>
+            <?php else: ?>
+            <p class="settings-hint">
+                <?php p($l->t('Runs smbclient allinfo against one specific file and shows exactly what it returned and how this app parsed it - the same logic the scan uses to read a file\'s real mtime. Use this to confirm that parsing matches your Samba server before trusting scan results at scale. Read-only - never writes anything.')); ?>
+            </p>
+            <p>
+                <label for="smb-mtime-fix-debug-mount"><?php p($l->t('Mount:')); ?></label>
+                <select id="smb-mtime-fix-debug-mount" class="select">
+                    <?php foreach ($_['smbMounts'] as $mount): ?>
+                    <option value="<?php p($mount['id']); ?>"><?php p($mount['label']); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </p>
+            <p>
+                <label for="smb-mtime-fix-debug-path"><?php p($l->t('File path, relative to the mount (e.g. folder/file.txt):')); ?></label><br/>
+                <input type="text" id="smb-mtime-fix-debug-path" class="input" style="width: 100%; max-width: 500px;" placeholder="folder/file.txt" />
+            </p>
+            <button id="smb-mtime-fix-debug-btn" class="button">
+                <?php p($l->t('Test allinfo parsing')); ?>
+            </button>
+            <span id="smb-mtime-fix-debug-status"></span>
+
+            <div id="smb-mtime-fix-debug-result" style="display:none; margin-top: 1em;">
+                <p><strong><?php p($l->t('Parsed result:')); ?></strong> <span id="smb-mtime-fix-debug-parsed"></span></p>
+                <p><strong><?php p($l->t('Line matched:')); ?></strong> <code id="smb-mtime-fix-debug-line"></code></p>
+                <p><strong><?php p($l->t('Raw allinfo output:')); ?></strong></p>
+                <pre id="smb-mtime-fix-debug-raw" style="background: var(--color-background-dark, #f0f0f0); padding: 0.75em; overflow-x: auto; white-space: pre-wrap; border-radius: 4px;"></pre>
+            </div>
+            <?php endif; ?>
+        </div>
+    </details>
 </div>
 

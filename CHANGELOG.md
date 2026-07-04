@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.2
+- New collapsed "Advanced" section on the admin page with a "Test allinfo
+  parsing" tool: pick a mount and a file path, and it runs the exact same
+  `smbclient allinfo` + parsing logic the scan uses, then shows the raw
+  output, which line matched, which parsing path was taken (zero-timestamp
+  sentinel / epoch-in-parentheses / strtotime fallback), and the resulting
+  timestamp - so you can confirm the parsing matches your actual Samba
+  server without SSH access or reading the source. Read-only, never
+  writes anything. Refactored the underlying allinfo call and parser into
+  shared helpers so this diagnostic and the real scan can't drift apart.
+
+## 0.5.1
+- Starting a manual scan now clears any leftover "Scan & fix all
+  automatically" status text, and starting an auto-fix run now clears the
+  manual scan's review list and status - each no longer leaves stale
+  output from the other lying around on screen.
+
 ## 0.5.0
 - **Behavior change**: "Update selected files" and "Scan & fix all
   automatically" now respect the dry-run setting, the same as the

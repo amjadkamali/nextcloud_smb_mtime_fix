@@ -836,10 +836,9 @@ class MtimeFixService {
      *
      * STILL WORTH A QUICK CHECK: exact `allinfo` formatting has drifted
      * across Samba versions, and I couldn't fully confirm the non-zero
-     * case byte-for-byte against a live server. Run this by hand once
-     * against a real file - `smbclient //host/share -U user%pass -c
-     * 'allinfo "path/to/file"'` - and eyeball that a "write_time:" line is
-     * present and looks like one of the two forms above before trusting
+     * case byte-for-byte against a live server. Use the "Test allinfo
+     * parsing" tool under Advanced on the admin page (or debugAllinfo()
+     * below) to confirm this against your actual server before trusting
      * scan results at scale.
      */
     private function queryActualMtime(string $host, string $share, string $user, string $password, string $domain, string $root, string $internalPath): ?int {
@@ -854,11 +853,37 @@ class MtimeFixService {
     private function queryActualMtimeInner(string $host, string $share, string $user, string $password, string $domain, string $root, string $internalPath): ?int {
         $smbPath = trim(rtrim($root, '/') . '/' . ltrim($internalPath, '/'), '/');
 
-        if (!function_exists('exec')) {
-            $this->logMessage(self::MESSAGE_TYPE_ALLINFO_FAILED, 'nextcloud_smb_mtime_fix: exec() is disabled on this PHP install, cannot run allinfo for {path}', [
-                'path' => $smbPath,
+        $result = $this->runAllinfo($host, $share, $user, $password, $domain, $smbPath);
+        if (!$result['ok']) {
+            $this->logMessage(self::MESSAGE_TYPE_ALLINFO_FAILED, 'nextcloud_smb_mtime_fix: allinfo failed for {path}: {output}', [
+                'path' => $smbPath, 'output' => implode("\n", $result['output']),
             ]);
             return null;
+        }
+
+        $parsed = $this->parseWriteTime($result['output']);
+        if ($parsed['mtime'] === null) {
+            $this->logMessage(self::MESSAGE_TYPE_PARSE_FAILED, 'nextcloud_smb_mtime_fix: could not parse write_time from allinfo for {path}: {output}', [
+                'path' => $smbPath, 'output' => implode("\n", $result['output']),
+            ]);
+        }
+
+        return $parsed['mtime'];
+    }
+
+    /**
+     * Runs `smbclient allinfo` for one file and returns the raw output
+     * without attempting to parse it. Shared by queryActualMtime() (the
+     * real scan path) and debugAllinfo() (the admin page's diagnostic
+     * tool), so both are guaranteed to see identical raw output for the
+     * same file - the diagnostic tool can't tell you something different
+     * from what the real scan actually does.
+     *
+     * @return array{ok:bool, output:list<string>, message:string}
+     */
+    private function runAllinfo(string $host, string $share, string $user, string $password, string $domain, string $smbPath): array {
+        if (!function_exists('exec')) {
+            return ['ok' => false, 'output' => [], 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)'];
         }
 
         $cmd = sprintf(
@@ -871,24 +896,34 @@ class MtimeFixService {
 
         exec($cmd, $output, $exitCode);
         if ($exitCode !== 0) {
-            $this->logMessage(self::MESSAGE_TYPE_ALLINFO_FAILED, 'nextcloud_smb_mtime_fix: allinfo failed for {path}: {output}', [
-                'path' => $smbPath, 'output' => implode("\n", $output),
-            ]);
-            return null;
+            return ['ok' => false, 'output' => $output, 'message' => 'smbclient exited with code ' . $exitCode];
         }
 
+        return ['ok' => true, 'output' => $output, 'message' => ''];
+    }
+
+    /**
+     * Parses a captured allinfo output for the write_time, same logic
+     * queryActualMtime() relies on, but also reporting which parsing
+     * path matched - used by debugAllinfo() to show the admin exactly
+     * how a result was reached, not just what it was.
+     *
+     * @param list<string> $output
+     * @return array{mtime:?int, matchedLine:?string, method:?string}
+     */
+    private function parseWriteTime(array $output): array {
         foreach ($output as $line) {
             if (stripos($line, 'write_time:') === false) {
                 continue;
             }
 
             if (stripos($line, 'NTTIME(0)') !== false) {
-                return 0;
+                return ['mtime' => 0, 'matchedLine' => $line, 'method' => 'zero-timestamp sentinel (NTTIME(0))'];
             }
 
             // Prefer an explicit epoch in parentheses when present.
             if (preg_match('/\((\d{9,})\)/', $line, $m)) {
-                return (int)$m[1];
+                return ['mtime' => (int)$m[1], 'matchedLine' => $line, 'method' => 'epoch found in parentheses'];
             }
 
             // Otherwise parse whatever human-readable date follows the label.
@@ -896,14 +931,83 @@ class MtimeFixService {
             if ($value !== '') {
                 $parsed = strtotime($value);
                 if ($parsed !== false) {
-                    return $parsed;
+                    return ['mtime' => $parsed, 'matchedLine' => $line, 'method' => 'strtotime() on the human-readable date'];
                 }
+                return ['mtime' => null, 'matchedLine' => $line, 'method' => 'found a write_time line, but strtotime() could not parse it'];
             }
         }
 
-        $this->logMessage(self::MESSAGE_TYPE_PARSE_FAILED, 'nextcloud_smb_mtime_fix: could not parse write_time from allinfo for {path}: {output}', [
-            'path' => $smbPath, 'output' => implode("\n", $output),
-        ]);
-        return null;
+        return ['mtime' => null, 'matchedLine' => null, 'method' => 'no write_time line found in the output at all'];
+    }
+
+    /**
+     * Runs `smbclient allinfo` against one specific file on one specific
+     * mount and reports exactly what came back and how it was parsed -
+     * for confirming (or debugging) the write_time parsing described
+     * above against your actual SMB server, from the admin page, without
+     * needing shell access.
+     *
+     * @return array{
+     *     ok: bool,
+     *     rawOutput: string,
+     *     parsedMtime: int|null,
+     *     parsedMtimeFormatted: string|null,
+     *     matchedLine: string|null,
+     *     method: string|null,
+     *     message: string
+     * }
+     */
+    public function debugAllinfo(int $mountId, string $path): array {
+        try {
+            $mountConfig = $this->globalStoragesService->getStorage($mountId);
+            if ($mountConfig === null) {
+                return $this->debugAllinfoResult(false, '', null, null, null, 'mount config not found');
+            }
+
+            $options = $mountConfig->getBackendOptions();
+            $host = $options['host'] ?? '';
+            $share = $options['share'] ?? '';
+            $user = $options['user'] ?? '';
+            $password = $options['password'] ?? '';
+            $domain = $options['domain'] ?? '';
+            $root = trim($options['root'] ?? '', '/');
+
+            $smbPath = trim(rtrim($root, '/') . '/' . ltrim($path, '/'), '/');
+
+            $result = $this->runAllinfo($host, $share, $user, $password, $domain, $smbPath);
+            if (!$result['ok']) {
+                return $this->debugAllinfoResult(false, implode("\n", $result['output']), null, null, null, $result['message']);
+            }
+
+            $rawOutput = implode("\n", $result['output']);
+            $parsed = $this->parseWriteTime($result['output']);
+
+            return $this->debugAllinfoResult(
+                $parsed['mtime'] !== null,
+                $rawOutput,
+                $parsed['mtime'],
+                $parsed['matchedLine'],
+                $parsed['method'],
+                $parsed['mtime'] !== null ? 'parsed successfully' : 'could not parse a write_time from the output - see raw output'
+            );
+        } catch (\Throwable $e) {
+            $this->logUnexpectedError('debugAllinfo', $e);
+            return $this->debugAllinfoResult(false, '', null, null, null, 'unexpected error - see log');
+        }
+    }
+
+    /**
+     * @return array{ok:bool, rawOutput:string, parsedMtime:int|null, parsedMtimeFormatted:string|null, matchedLine:string|null, method:string|null, message:string}
+     */
+    private function debugAllinfoResult(bool $ok, string $rawOutput, ?int $mtime, ?string $matchedLine, ?string $method, string $message): array {
+        return [
+            'ok' => $ok,
+            'rawOutput' => $rawOutput,
+            'parsedMtime' => $mtime,
+            'parsedMtimeFormatted' => $mtime !== null ? gmdate('Y-m-d H:i:s', $mtime) . ' UTC' : null,
+            'matchedLine' => $matchedLine,
+            'method' => $method,
+            'message' => $message,
+        ];
     }
 }

@@ -122,6 +122,7 @@
             resultsBody.innerHTML = '';
             lastMismatches = [];
             scanCancelled = false;
+            autoStatus.textContent = '';
 
             var limitRaw = scanLimitInput ? scanLimitInput.value.trim() : '';
             var limit = 0;
@@ -395,6 +396,10 @@
             autoBtn.textContent = t('nextcloud_smb_mtime_fix', 'Stop');
             autoBtn.dataset.mode = 'stop';
             setManualControlsDisabled(true);
+            resultsWrap.style.display = 'none';
+            resultsBody.innerHTML = '';
+            lastMismatches = [];
+            scanStatus.textContent = '';
 
             var limitRaw = scanLimitInput ? scanLimitInput.value.trim() : '';
             var fixLimit = 0;
@@ -501,5 +506,61 @@
 
             runScanBatch(null);
         });
+
+        // --- advanced: test allinfo parsing -------------------------------------
+
+        var debugMountSelect = document.getElementById('smb-mtime-fix-debug-mount');
+        var debugPathInput = document.getElementById('smb-mtime-fix-debug-path');
+        var debugBtn = document.getElementById('smb-mtime-fix-debug-btn');
+        var debugStatus = document.getElementById('smb-mtime-fix-debug-status');
+        var debugResult = document.getElementById('smb-mtime-fix-debug-result');
+        var debugParsed = document.getElementById('smb-mtime-fix-debug-parsed');
+        var debugLine = document.getElementById('smb-mtime-fix-debug-line');
+        var debugRaw = document.getElementById('smb-mtime-fix-debug-raw');
+
+        if (debugBtn) {
+            debugBtn.addEventListener('click', function () {
+                var mountId = debugMountSelect ? parseInt(debugMountSelect.value, 10) : 0;
+                var path = debugPathInput ? debugPathInput.value.trim() : '';
+
+                if (!mountId || !path) {
+                    debugStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Pick a mount and enter a file path first.');
+                    return;
+                }
+
+                debugBtn.disabled = true;
+                debugStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Running…');
+                debugResult.style.display = 'none';
+
+                jsonFetch(apiUrl('/debug-allinfo'), {
+                    method: 'POST',
+                    body: JSON.stringify({ mountId: mountId, path: path }),
+                })
+                    .then(function (data) {
+                        debugStatus.textContent = '';
+                        debugResult.style.display = '';
+                        debugRaw.textContent = data.rawOutput || t('nextcloud_smb_mtime_fix', '(no output)');
+                        debugLine.textContent = data.matchedLine || t('nextcloud_smb_mtime_fix', '(none)');
+
+                        if (data.parsedMtime !== null && data.parsedMtime !== undefined) {
+                            debugParsed.textContent = t('nextcloud_smb_mtime_fix', '{formatted} (unix {mtime}) - via {method}', {
+                                formatted: data.parsedMtimeFormatted,
+                                mtime: data.parsedMtime,
+                                method: data.method,
+                            });
+                        } else {
+                            debugParsed.textContent = t('nextcloud_smb_mtime_fix', 'Could not parse - {message}', {
+                                message: data.message || t('nextcloud_smb_mtime_fix', 'unknown error'),
+                            });
+                        }
+                    })
+                    .catch(function () {
+                        debugStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Request failed - check the server log.');
+                    })
+                    .finally(function () {
+                        debugBtn.disabled = false;
+                    });
+            });
+        }
     });
 })();

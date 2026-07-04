@@ -148,4 +148,26 @@ class AdminController extends Controller {
             return new JSONResponse(['results' => $results]);
         });
     }
+
+    /**
+     * Read-only diagnostic: runs `smbclient allinfo` against one specific
+     * file and reports the raw output plus how it was parsed, so an admin
+     * can confirm the write_time parsing matches their actual Samba
+     * server without shell access. Never writes anything.
+     */
+    public function debugAllinfo(): JSONResponse {
+        if ($denied = $this->requireAdmin()) {
+            return $denied;
+        }
+        return $this->runSafely(function () {
+            $mountId = (int)$this->request->getParam('mountId', '0');
+            $path = trim((string)$this->request->getParam('path', ''));
+
+            if ($mountId <= 0 || $path === '') {
+                return new JSONResponse(['ok' => false, 'message' => 'mountId and path are required'], Http::STATUS_BAD_REQUEST);
+            }
+
+            return new JSONResponse($this->service->debugAllinfo($mountId, $path));
+        });
+    }
 }
