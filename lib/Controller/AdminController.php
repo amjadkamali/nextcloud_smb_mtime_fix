@@ -96,7 +96,10 @@ class AdminController extends Controller {
                 $batchSize = 200;
             }
 
-            $result = $this->service->scanForMismatchesBatch($cursor, max($limit, 0), $batchSize);
+            $mountIdParam = $this->request->getParam('mountId', null);
+            $mountId = ($mountIdParam !== null && $mountIdParam !== '') ? (int)$mountIdParam : null;
+
+            $result = $this->service->scanForMismatchesBatch($cursor, max($limit, 0), $batchSize, $mountId);
             return new JSONResponse($result);
         });
     }

@@ -19,10 +19,12 @@ no built-in way to fix this after the fact.
   the cache's `storage_mtime` so the ETag is never recomputed - meaning
   synced clients never see a spurious "file changed" and never redownload.
 - **Retroactive scan**: an admin settings page lets you scan existing SMB
-  mounts for files that were already affected before this app was
-  installed, review the list, and apply fixes on demand. There's also a
-  "scan and fix all automatically" option that skips the review step
-  entirely - see the caveat below before using it on a large share.
+  mounts (all of them, or one specific mount via a dropdown) for files that
+  were already affected before this app was installed, review the list,
+  and apply fixes on demand. There's also a "scan and fix all
+  automatically" button next to it that skips the review step - see the
+  caveat below before using it on a large share. Both apply paths respect
+  the dry-run setting above, the same as the real-time listener.
 - **Dry run mode** (on by default): log what the app *would* do without
   touching anything, until you've verified it against your own SMB server.
 - **Configurable logging**: separate log levels for routine status messages
@@ -91,12 +93,13 @@ are also always written to PHP's native error log as a backstop.
   (user-added) SMB external storage isn't scanned or auto-fixed.
 - "Scan & fix all automatically" writes to every mismatched file it finds
   with no per-file review - it's built on the same batching as the manual
-  flow, so it won't time out, but it will happily write thousands of
-  corrections in a row based on the same not-fully-verified `allinfo`
-  parsing mentioned above. Confirm a normal scan + manual apply looks
-  right on your setup before trusting it with a whole share. It also only
-  guards against double-starting from the same browser tab - running it
-  from two tabs or two admin sessions at once isn't prevented.
+  flow, so it won't time out, but (when dry-run is off) it will happily
+  write thousands of corrections in a row based on the same
+  not-fully-verified `allinfo` parsing mentioned above. Confirm a normal
+  scan + manual apply looks right on your setup before trusting it with a
+  whole share. It also only guards against double-starting from the same
+  browser tab - running it from two tabs or two admin sessions at once
+  isn't prevented.
 
 ## License
 

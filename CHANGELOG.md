@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+- **Behavior change**: "Update selected files" and "Scan & fix all
+  automatically" now respect the dry-run setting, the same as the
+  real-time listener. Previously retroactive apply always wrote for real
+  regardless of dry-run, on the theory that clicking the button was itself
+  confirmation - one single switch governing every write path was judged
+  more consistent. With dry-run on, both now just log what they'd do;
+  rows that were only dry-run-logged stay in the review list (nothing was
+  actually written) instead of disappearing as if fixed.
+- Consolidated "Scan & fix all automatically" into the main scan section -
+  it's now a second button next to "Scan for mismatches", sharing the same
+  limit field, instead of a separate section with its own heading and
+  explanation. The confirmation dialog carries the necessary warning on
+  its own.
+- Added a "SMB mount" dropdown to restrict a scan (manual or automatic) to
+  one specific mount instead of always scanning every configured SMB
+  mount.
+
 ## 0.4.8
 - Fixed: the manual "Scan for mismatches" limit field didn't actually cap
   the total across a multi-batch scan. The backend has no memory between

@@ -53,10 +53,11 @@ class MtimeFixService {
     // Dry-run toggle - tri-state: on / temp_off / off
     // ---------------------------------------------------------------
     //
-    // Governs the AUTOMATIC real-time listener only. The manual retroactive
-    // scan/apply flow does NOT consult this - that flow already requires
-    // the admin to review a concrete file list and click "Update selected
-    // files", which is its own confirmation step. See applyMismatch().
+    // Governs every write path in the app: the real-time listener, manual
+    // "Update selected files", and "Scan & fix all automatically" all
+    // check this the same way, via applyFix()/applyMismatch(). One switch,
+    // one behavior everywhere - no special-cased "retroactive apply always
+    // writes for real" exception.
     //
     // - "on" (default): persisted in app config. Survives everything.
     // - "off": persisted in app config. Also survives everything - this is
@@ -469,18 +470,27 @@ class MtimeFixService {
      * the returned cursor, until it comes back null).
      *
      * @param array{mountIndex?:int, afterFileId?:int} $cursor
+     * @param int|null $mountId Restrict the scan to one specific mount
+     *     (its files_external config id, as returned by listSmbMounts());
+     *     null means every configured SMB mount.
      * @return array{
      *     mismatches: list<array{storageId:string, mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime:int}>,
      *     cursor: array{mountIndex:int, afterFileId:int}|null,
      *     examined: int
      * }
      */
-    public function scanForMismatchesBatch(array $cursor, int $limit, int $batchSize): array {
+    public function scanForMismatchesBatch(array $cursor, int $limit, int $batchSize, ?int $mountId = null): array {
         $mismatches = [];
         $examined = 0;
 
         try {
             $mounts = $this->getOrderedSmbMounts();
+            if ($mountId !== null) {
+                $mounts = array_values(array_filter(
+                    $mounts,
+                    static fn ($m) => $m->getId() === $mountId
+                ));
+            }
         } catch (\Throwable $e) {
             $this->logUnexpectedError('scanForMismatchesBatch/getAllStorages', $e);
             return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => 0];
@@ -580,12 +590,50 @@ class MtimeFixService {
     }
 
     /**
-     * Applies a single mismatch found by scanForMismatchesBatch(). Called only
-     * from the admin "Update selected files" button - i.e. after the admin
-     * has already seen the concrete file list and confirmed. This always
-     * performs a real write regardless of the dry-run toggle, because the
-     * click itself is the confirmation; the dry-run toggle exists to gate
-     * the *unattended* real-time path, not a manually-reviewed one.
+     * For populating the admin page's "which mount to scan" dropdown.
+     *
+     * @return list<array{id:int, label:string}>
+     */
+    public function listSmbMounts(): array {
+        try {
+            $mounts = $this->getOrderedSmbMounts();
+        } catch (\Throwable $e) {
+            $this->logUnexpectedError('listSmbMounts', $e);
+            return [];
+        }
+
+        $result = [];
+        foreach ($mounts as $mountConfig) {
+            try {
+                $options = $mountConfig->getBackendOptions();
+                $host = $options['host'] ?? '';
+                $share = $options['share'] ?? '';
+                $root = trim($options['root'] ?? '', '/');
+
+                $label = $mountConfig->getMountPoint();
+                $detail = trim($host . ($share !== '' ? '/' . $share : '') . ($root !== '' ? '/' . $root : ''));
+                if ($detail !== '') {
+                    $label .= ' (' . $detail . ')';
+                }
+
+                $result[] = ['id' => $mountConfig->getId(), 'label' => $label];
+            } catch (\Throwable $e) {
+                $this->logUnexpectedError('listSmbMounts/mount', $e);
+                continue;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Applies a single mismatch found by scanForMismatchesBatch(). Called
+     * from the admin "Update selected files" button, or from "Scan & fix
+     * all automatically". Respects the dry-run toggle the same as the
+     * real-time listener does - with dry-run on, this only logs what it
+     * would do rather than writing anything, so there's one single switch
+     * that governs every write path in the app instead of the retroactive
+     * flows being a special always-real-writes case.
      *
      * @param array{mountId:int, fileId:int, path:string, cachedMtime:int} $mismatch
      * @return array{ok:bool, dryRun:bool, message:string}
@@ -607,7 +655,7 @@ class MtimeFixService {
                 'root' => trim($options['root'] ?? '', '/'),
             ];
 
-            return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], false);
+            return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], $this->isDryRunEnabled());
         } catch (\Throwable $e) {
             $this->logUnexpectedError('applyMismatch', $e);
             return ['ok' => false, 'dryRun' => false, 'message' => 'unexpected error - see log'];

@@ -12,6 +12,7 @@
         var logLevelStatus = document.getElementById('smb-mtime-fix-log-level-msg');
         var scanBtn = document.getElementById('smb-mtime-fix-scan');
         var scanLimitInput = document.getElementById('smb-mtime-fix-scan-limit');
+        var mountSelect = document.getElementById('smb-mtime-fix-mount-select');
         var scanStatus = document.getElementById('smb-mtime-fix-scan-status');
         var resultsWrap = document.getElementById('smb-mtime-fix-results');
         var resultsBody = document.getElementById('smb-mtime-fix-results-body');
@@ -44,6 +45,11 @@
 
         function formatDate(ts) {
             return new Date(ts * 1000).toLocaleString();
+        }
+
+        function getSelectedMountId() {
+            var raw = mountSelect ? mountSelect.value : '';
+            return raw === '' ? null : parseInt(raw, 10);
         }
 
         // --- dry-run tri-state ------------------------------------------------
@@ -161,7 +167,7 @@
 
                 jsonFetch(apiUrl('/scan'), {
                     method: 'POST',
-                    body: JSON.stringify({ cursor: cursor, limit: remainingLimit, batchSize: 200 }),
+                    body: JSON.stringify({ cursor: cursor, limit: remainingLimit, batchSize: 200, mountId: getSelectedMountId() }),
                 })
                     .then(function (data) {
                         examinedTotal += data.examined || 0;
@@ -250,12 +256,13 @@
             }
 
             var okCount = 0;
+            var dryRunCount = 0;
             var failCount = 0;
             var hadRequestFailure = false;
 
             function runChunk(chunkIndex) {
                 if (chunkIndex >= chunks.length) {
-                    onComplete({ ok: okCount, failed: failCount, hadRequestFailure: hadRequestFailure });
+                    onComplete({ ok: okCount, dryRun: dryRunCount, failed: failCount, hadRequestFailure: hadRequestFailure });
                     return;
                 }
 
@@ -266,7 +273,12 @@
                 })
                     .then(function (data) {
                         (data.results || []).forEach(function (r) {
-                            if (r.ok) {
+                            if (r.ok && r.dryRun) {
+                                // Dry-run means nothing was actually written -
+                                // leave the row in place so it's still there
+                                // to apply for real later.
+                                dryRunCount++;
+                            } else if (r.ok) {
                                 okCount++;
                                 removeResultRow(r.path);
                             } else {
@@ -279,7 +291,7 @@
                         failCount += chunk.length;
                     })
                     .finally(function () {
-                        onProgress(okCount, failCount, chunkIndex + 1, chunks.length);
+                        onProgress(okCount, dryRunCount, failCount);
                         runChunk(chunkIndex + 1);
                     });
             }
@@ -303,7 +315,7 @@
 
             var confirmMsg = t(
                 'nextcloud_smb_mtime_fix',
-                'Update mtimes for {count} file(s) directly on the SMB share? This writes to the share now, regardless of the dry-run setting above.',
+                'Update mtimes for {count} file(s) on the SMB share? With dry-run on (see the setting above), this only logs what it would do - turn dry-run off first if you want it to write for real.',
                 { count: selected.length }
             );
             if (!window.confirm(confirmMsg)) {
@@ -315,17 +327,24 @@
 
             applyItemsInChunks(
                 selected,
-                function (ok, failed, chunksDone, chunksTotal) {
+                function (ok, dryRun, failed) {
                     applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Applying… {done}/{total}', {
-                        done: ok + failed,
+                        done: ok + dryRun + failed,
                         total: total,
                     });
                 },
                 function (result) {
+                    var note = '';
+                    if (result.dryRun > 0) {
+                        note += ' ' + t('nextcloud_smb_mtime_fix', '{count} logged as dry-run (nothing written).', { count: result.dryRun });
+                    }
+                    if (result.hadRequestFailure) {
+                        note += ' ' + t('nextcloud_smb_mtime_fix', '(one or more batches failed - check the server log; unfixed files are still listed below)');
+                    }
                     applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{ok}/{total} updated.{note}', {
                         ok: result.ok,
                         total: total,
-                        note: result.hadRequestFailure ? ' ' + t('nextcloud_smb_mtime_fix', '(one or more batches failed - check the server log; unfixed files are still listed below)') : '',
+                        note: note,
                     });
                     applyBtn.disabled = false;
                 }
@@ -365,7 +384,7 @@
 
             var confirmMsg = t(
                 'nextcloud_smb_mtime_fix',
-                'This scans every configured SMB mount and immediately fixes every mismatch it finds, with no review step - it always writes for real, regardless of the dry-run setting above. Make sure you\'ve already confirmed a normal scan and manual "Update selected files" looks correct on your SMB server. Continue?'
+                'This scans the selected mount(s) and immediately applies every mismatch it finds, with no review step. It respects the dry-run setting above - with dry-run on, it only logs what it would do; turn dry-run off first if you want it to write for real. Make sure you\'ve already confirmed a normal scan and manual "Update selected files" looks correct on your SMB server. Continue?'
             );
             if (!window.confirm(confirmMsg)) {
                 return;
@@ -388,17 +407,31 @@
 
             var examined = 0;
             var fixed = 0;
+            var wouldFix = 0;
             var failed = 0;
 
             function finish(note) {
-                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', '{examined} files checked, {fixed} fixed, {failed} failed.{note}', {
-                    examined: examined, fixed: fixed, failed: failed,
-                    note: note ? ' ' + note : '',
-                });
+                var parts = [t('nextcloud_smb_mtime_fix', '{examined} files checked', { examined: examined })];
+                if (wouldFix > 0) {
+                    parts.push(t('nextcloud_smb_mtime_fix', '{count} would be fixed (dry-run - nothing written)', { count: wouldFix }));
+                }
+                parts.push(t('nextcloud_smb_mtime_fix', '{count} fixed', { count: fixed }));
+                if (failed > 0) {
+                    parts.push(t('nextcloud_smb_mtime_fix', '{count} failed', { count: failed }));
+                }
+                autoStatus.textContent = ' ' + parts.join(', ') + '.' + (note ? ' ' + note : '');
                 autoBtn.textContent = t('nextcloud_smb_mtime_fix', 'Scan & fix all automatically');
                 autoBtn.dataset.mode = 'scan';
                 backgroundRunActive = false;
                 setManualControlsDisabled(false);
+            }
+
+            function progressText() {
+                return t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed{wouldFixPart} so far.', {
+                    examined: examined,
+                    fixed: fixed,
+                    wouldFixPart: wouldFix > 0 ? t('nextcloud_smb_mtime_fix', ' ({wouldFix} dry-run)', { wouldFix: wouldFix }) : '',
+                });
             }
 
             function runScanBatch(cursor) {
@@ -407,15 +440,13 @@
                     return;
                 }
 
-                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed so far.', {
-                    examined: examined, fixed: fixed,
-                });
+                autoStatus.textContent = ' ' + progressText();
 
                 jsonFetch(apiUrl('/scan'), {
                     // Always unlimited per scan batch - the fix-count limit
                     // is enforced below, across the whole run, not per batch.
                     method: 'POST',
-                    body: JSON.stringify({ cursor: cursor, limit: 0, batchSize: 200 }),
+                    body: JSON.stringify({ cursor: cursor, limit: 0, batchSize: 200, mountId: getSelectedMountId() }),
                 })
                     .then(function (scanData) {
                         examined += scanData.examined || 0;
@@ -432,15 +463,25 @@
 
                         applyItemsInChunks(
                             found,
-                            function (ok, failCount) {
-                                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed so far.', {
-                                    examined: examined, fixed: fixed + ok,
+                            function (ok, dryRun) {
+                                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed{wouldFixPart} so far.', {
+                                    examined: examined,
+                                    fixed: fixed + ok,
+                                    wouldFixPart: (wouldFix + dryRun) > 0 ? t('nextcloud_smb_mtime_fix', ' ({wouldFix} dry-run)', { wouldFix: wouldFix + dryRun }) : '',
                                 });
                             },
                             function (result) {
                                 fixed += result.ok;
+                                wouldFix += result.dryRun;
                                 failed += result.failed;
 
+                                // In dry-run, "fixed" never grows (nothing is
+                                // ever written), so the fix-count limit only
+                                // makes sense against real writes - if
+                                // dry-run is on for the whole run, this cap
+                                // simply won't trigger and the scan runs to
+                                // completion, which is the same "just show me
+                                // what dry-run would do" behavior as before.
                                 if (fixLimit > 0 && fixed >= fixLimit) {
                                     finish();
                                     return;

@@ -31,6 +31,7 @@ class AdminSettings implements ISettings {
             'dryRunState' => $this->service->getDryRunState(),
             'logLevels' => $logLevels,
             'logLevelDefaults' => $logLevelDefaults,
+            'smbMounts' => $this->service->listSmbMounts(),
         ], '');
     }
 
