@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.4.4
+- **Reliability**: every risky operation (raw SQL against `oc_filecache`/
+  `oc_storages`, calls into `files_external` internals, `exec()`) is now
+  wrapped so unexpected failures - a Nextcloud/DB schema change,
+  `exec()` disabled via `disable_functions`, an internal API changing
+  shape - degrade to "log an error and do nothing" instead of an
+  uncaught exception, a partial write, or (on the real-time path) any
+  risk of disrupting the actual file write happening in Nextcloud core.
+  New "unexpected error" messages fall under the existing Errors log
+  category; a copy is also always written via PHP's native `error_log()`
+  as a backstop that doesn't depend on Nextcloud's own config being
+  intact.
 - **Breaking**: app id renamed from `smb_mtime_fix` to `nextcloud_smb_mtime_fix`
   to align with this repo's name. If you're upgrading from an earlier
   install, disable and remove the old `smb_mtime_fix` folder/app first,
@@ -9,6 +20,10 @@
   they'll reset to defaults under the new id.
 
 ## 0.4.3
+- Clarified that the retroactive scan's optional limit caps the number of
+  mismatches found, not the number of files examined along the way.
+
+## 0.4.1
 - Optional scan limit now defaults to unlimited when left blank, instead
   of defaulting to 500.
 

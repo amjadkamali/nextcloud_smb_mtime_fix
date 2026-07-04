@@ -177,6 +177,7 @@ class MtimeFixService {
     public const MESSAGE_TYPE_ALLINFO_FAILED = 'allinfo_failed';
     public const MESSAGE_TYPE_PARSE_FAILED = 'parse_failed';
     public const MESSAGE_TYPE_TEMP_OFF_UNSUPPORTED = 'temp_off_unsupported';
+    public const MESSAGE_TYPE_UNEXPECTED = 'unexpected';
 
     public const CATEGORY_STATUS = 'status';
     public const CATEGORY_ERRORS = 'errors';
@@ -192,6 +193,7 @@ class MtimeFixService {
         self::MESSAGE_TYPE_ALLINFO_FAILED => self::CATEGORY_ERRORS,
         self::MESSAGE_TYPE_PARSE_FAILED => self::CATEGORY_ERRORS,
         self::MESSAGE_TYPE_TEMP_OFF_UNSUPPORTED => self::CATEGORY_ERRORS,
+        self::MESSAGE_TYPE_UNEXPECTED => self::CATEGORY_ERRORS,
     ];
 
     public function getCategoryLogLevel(string $category): int {
@@ -234,6 +236,39 @@ class MtimeFixService {
         $this->logAt($this->getCategoryLogLevel($category), $message, $context);
     }
 
+    /**
+     * The "worst case" backstop: called whenever something genuinely
+     * unexpected happens (a Nextcloud/files_external internal changed
+     * shape, a DB schema drift broke a raw query, exec() is disabled,
+     * etc.) - anything we didn't specifically anticipate. Deliberately
+     * does NOT depend on this app's own config being readable or correct:
+     * it goes through the normal "errors" category (so it's consistent
+     * with everything else when things are working normally), but it also
+     * unconditionally writes to PHP's native error_log() as a fallback
+     * that works even if Nextcloud's own config/logging stack is what's
+     * broken. Callers must treat this as "abort - do not write anything",
+     * never as a reason to proceed.
+     */
+    private function logUnexpectedError(string $where, \Throwable $e): void {
+        $line = sprintf(
+            'nextcloud_smb_mtime_fix: unexpected error in %s: %s: %s',
+            $where,
+            get_class($e),
+            $e->getMessage()
+        );
+
+        try {
+            $this->logMessage(self::MESSAGE_TYPE_UNEXPECTED, $line);
+        } catch (\Throwable $inner) {
+            // even logging failed (e.g. config/DB itself is the thing
+            // that's broken) - fall through to the unconditional backstop
+        }
+
+        // Unconditional backstop - independent of Nextcloud's own logger,
+        // config, and this app's log-level settings.
+        error_log($line);
+    }
+
     // ---------------------------------------------------------------
     // Real-time path (called from MtimeFixListener on every write)
     // ---------------------------------------------------------------
@@ -242,6 +277,20 @@ class MtimeFixService {
      * @return array{ok:bool, dryRun:bool, message:string}
      */
     public function fixMtime(IStorage $storage, string $internalPath, int $intendedMtime): array {
+        try {
+            return $this->fixMtimeInner($storage, $internalPath, $intendedMtime);
+        } catch (\Throwable $e) {
+            // Outermost safety net for the real-time path: this runs
+            // inline during an actual user file write, so under no
+            // circumstances should an internal failure here propagate up
+            // and risk disrupting that write. Whatever went wrong, we
+            // report failure and do nothing further.
+            $this->logUnexpectedError('fixMtime', $e);
+            return ['ok' => false, 'dryRun' => true, 'message' => 'unexpected error - see log'];
+        }
+    }
+
+    private function fixMtimeInner(IStorage $storage, string $internalPath, int $intendedMtime): array {
         $conn = $this->resolveBackendOptions($storage);
         if ($conn === null) {
             $msg = "could not resolve SMB connection details for {$internalPath}";
@@ -278,9 +327,20 @@ class MtimeFixService {
             return $this->resolvedCache[$storageId];
         }
 
+        try {
+            $allStorages = $this->globalStoragesService->getAllStorages();
+        } catch (\Throwable $e) {
+            // files_external internal - not a stable OCP API. If this
+            // throws (a future Nextcloud/files_external change), fail
+            // safe: treat as "no mounts known", never guess.
+            $this->logUnexpectedError('resolveBackendOptions/getAllStorages', $e);
+            $this->resolvedCache[$storageId] = null;
+            return null;
+        }
+
         $candidatesTried = [];
 
-        foreach ($this->globalStoragesService->getAllStorages() as $mountConfig) {
+        foreach ($allStorages as $mountConfig) {
             if ($mountConfig->getBackend()->getIdentifier() !== 'smb') {
                 continue;
             }
@@ -391,49 +451,65 @@ class MtimeFixService {
     public function scanForMismatches(int $limit = 0): array {
         $mismatches = [];
 
-        foreach ($this->globalStoragesService->getAllStorages() as $mountConfig) {
-            if ($mountConfig->getBackend()->getIdentifier() !== 'smb') {
-                continue;
-            }
+        try {
+            $allStorages = $this->globalStoragesService->getAllStorages();
+        } catch (\Throwable $e) {
+            $this->logUnexpectedError('scanForMismatches/getAllStorages', $e);
+            return $mismatches;
+        }
 
-            $options = $mountConfig->getBackendOptions();
-            $host = $options['host'] ?? '';
-            $share = $options['share'] ?? '';
-            $user = $options['user'] ?? '';
-            $password = $options['password'] ?? '';
-            $domain = $options['domain'] ?? '';
-            $root = trim($options['root'] ?? '', '/');
-
-            $storageId = $this->buildStorageId($user, $host, $share, $options['root'] ?? '/');
-            $numericId = $this->getNumericStorageId($storageId);
-            if ($numericId === null) {
-                continue;
-            }
-
-            foreach ($this->iterateCacheEntries($numericId) as $entry) {
-                if ($entry['mimetype'] === 'httpd/unix-directory') {
+        foreach ($allStorages as $mountConfig) {
+            try {
+                if ($mountConfig->getBackend()->getIdentifier() !== 'smb') {
                     continue;
                 }
 
-                $actualMtime = $this->queryActualMtime($host, $share, $user, $password, $domain, $root, $entry['path']);
-                if ($actualMtime === null) {
+                $options = $mountConfig->getBackendOptions();
+                $host = $options['host'] ?? '';
+                $share = $options['share'] ?? '';
+                $user = $options['user'] ?? '';
+                $password = $options['password'] ?? '';
+                $domain = $options['domain'] ?? '';
+                $root = trim($options['root'] ?? '', '/');
+
+                $storageId = $this->buildStorageId($user, $host, $share, $options['root'] ?? '/');
+                $numericId = $this->getNumericStorageId($storageId);
+                if ($numericId === null) {
                     continue;
                 }
 
-                if (abs($actualMtime - (int)$entry['mtime']) > self::MISMATCH_THRESHOLD_SECONDS) {
-                    $mismatches[] = [
-                        'storageId' => $storageId,
-                        'mountId' => $mountConfig->getId(),
-                        'fileId' => (int)$entry['fileid'],
-                        'path' => $entry['path'],
-                        'cachedMtime' => (int)$entry['mtime'],
-                        'actualMtime' => $actualMtime,
-                    ];
+                foreach ($this->iterateCacheEntries($numericId) as $entry) {
+                    if ($entry['mimetype'] === 'httpd/unix-directory') {
+                        continue;
+                    }
 
-                    if ($limit > 0 && count($mismatches) >= $limit) {
-                        return $mismatches;
+                    $actualMtime = $this->queryActualMtime($host, $share, $user, $password, $domain, $root, $entry['path']);
+                    if ($actualMtime === null) {
+                        continue;
+                    }
+
+                    if (abs($actualMtime - (int)$entry['mtime']) > self::MISMATCH_THRESHOLD_SECONDS) {
+                        $mismatches[] = [
+                            'storageId' => $storageId,
+                            'mountId' => $mountConfig->getId(),
+                            'fileId' => (int)$entry['fileid'],
+                            'path' => $entry['path'],
+                            'cachedMtime' => (int)$entry['mtime'],
+                            'actualMtime' => $actualMtime,
+                        ];
+
+                        if ($limit > 0 && count($mismatches) >= $limit) {
+                            return $mismatches;
+                        }
                     }
                 }
+            } catch (\Throwable $e) {
+                // One mount's processing blowing up (unexpected option
+                // shape, a files_external internal changing, etc.)
+                // shouldn't take down the whole scan - log it and move on
+                // to the next mount.
+                $this->logUnexpectedError('scanForMismatches/mount', $e);
+                continue;
             }
         }
 
@@ -454,25 +530,25 @@ class MtimeFixService {
     public function applyMismatch(array $mismatch): array {
         try {
             $mountConfig = $this->globalStoragesService->getStorage((int)$mismatch['mountId']);
+            if ($mountConfig === null) {
+                return ['ok' => false, 'dryRun' => false, 'message' => 'mount config not found'];
+            }
+
+            $options = $mountConfig->getBackendOptions();
+            $conn = [
+                'host' => $options['host'] ?? '',
+                'share' => $options['share'] ?? '',
+                'user' => $options['user'] ?? '',
+                'password' => $options['password'] ?? '',
+                'domain' => $options['domain'] ?? '',
+                'root' => trim($options['root'] ?? '', '/'),
+            ];
+
+            return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], false);
         } catch (\Throwable $e) {
-            return ['ok' => false, 'dryRun' => false, 'message' => 'mount config not found'];
+            $this->logUnexpectedError('applyMismatch', $e);
+            return ['ok' => false, 'dryRun' => false, 'message' => 'unexpected error - see log'];
         }
-
-        if ($mountConfig === null) {
-            return ['ok' => false, 'dryRun' => false, 'message' => 'mount config not found'];
-        }
-
-        $options = $mountConfig->getBackendOptions();
-        $conn = [
-            'host' => $options['host'] ?? '',
-            'share' => $options['share'] ?? '',
-            'user' => $options['user'] ?? '',
-            'password' => $options['password'] ?? '',
-            'domain' => $options['domain'] ?? '',
-            'root' => trim($options['root'] ?? '', '/'),
-        ];
-
-        return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], false);
     }
 
     // ---------------------------------------------------------------
@@ -484,6 +560,20 @@ class MtimeFixService {
      * @return array{ok:bool, dryRun:bool, message:string}
      */
     private function applyFix(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun): array {
+        try {
+            return $this->applyFixInner($conn, $internalPath, $intendedMtime, $fileId, $dryRun);
+        } catch (\Throwable $e) {
+            // Safety net: whatever this was - a files_external internal
+            // that changed shape, a DB error from a schema we don't
+            // recognize, a TypeError from an unexpected argument, anything
+            // - we did NOT successfully verify a write happened, so we
+            // report failure rather than risk a silent partial/bad write.
+            $this->logUnexpectedError('applyFix', $e);
+            return ['ok' => false, 'dryRun' => $dryRun, 'message' => 'unexpected error - see log'];
+        }
+    }
+
+    private function applyFixInner(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun): array {
         ['host' => $host, 'share' => $share, 'user' => $user, 'password' => $password,
             'domain' => $domain, 'root' => $root] = $conn;
 
@@ -502,6 +592,12 @@ class MtimeFixService {
                 ['path' => $smbPath, 'time' => $smbTime]
             );
             return ['ok' => true, 'dryRun' => true, 'message' => "would set mtime to {$smbTime}"];
+        }
+
+        if (!function_exists('exec')) {
+            $msg = 'exec() is disabled on this PHP install (see disable_functions in php.ini) - cannot run smbclient';
+            $this->logMessage(self::MESSAGE_TYPE_SMBCLIENT_FAILED, 'nextcloud_smb_mtime_fix: {msg}', ['msg' => $msg]);
+            return ['ok' => false, 'dryRun' => false, 'message' => $msg];
         }
 
         $cmd = sprintf(
@@ -524,6 +620,14 @@ class MtimeFixService {
         // rather than a raw SQL string, so this works whether or not we
         // have a live ICache object for this storage (the retroactive path
         // only has host/share/creds + fileId, not a mounted IStorage).
+        //
+        // NOTE: the smbclient write above has already succeeded by this
+        // point. If this DB step throws (e.g. a future Nextcloud schema
+        // change breaks this query), the outer applyFix() catch will
+        // report failure even though the share itself was actually
+        // corrected - that's the safer side to fail on, since a spurious
+        // "changed" flag for a sync client is a much smaller problem than
+        // silently assuming a write worked when we can't confirm it.
         if ($fileId !== -1) {
             $qb = $this->db->getQueryBuilder();
             $qb->update('filecache')
@@ -546,33 +650,56 @@ class MtimeFixService {
     // ---------------------------------------------------------------
 
     private function getNumericStorageId(string $storageId): ?int {
-        $qb = $this->db->getQueryBuilder();
-        $qb->select('numeric_id')
-            ->from('storages')
-            ->where($qb->expr()->eq('id', $qb->createNamedParameter($storageId)));
+        try {
+            $qb = $this->db->getQueryBuilder();
+            $qb->select('numeric_id')
+                ->from('storages')
+                ->where($qb->expr()->eq('id', $qb->createNamedParameter($storageId)));
 
-        $result = $qb->executeQuery();
-        $row = $result->fetch();
-        $result->closeCursor();
+            $result = $qb->executeQuery();
+            $row = $result->fetch();
+            $result->closeCursor();
 
-        return $row ? (int)$row['numeric_id'] : null;
+            return $row ? (int)$row['numeric_id'] : null;
+        } catch (\Throwable $e) {
+            // Raw query against oc_storages - not a stable OCP API, so a
+            // future Nextcloud schema change could break this. Fail safe:
+            // treat as "couldn't resolve", skip this mount, don't crash
+            // the whole scan.
+            $this->logUnexpectedError('getNumericStorageId', $e);
+            return null;
+        }
     }
 
     /**
      * @return \Generator<array{fileid:int|string, path:string, mtime:int|string, mimetype:?string}>
      */
     private function iterateCacheEntries(int $numericStorageId): \Generator {
-        $qb = $this->db->getQueryBuilder();
-        $qb->select('fc.fileid', 'fc.path', 'fc.mtime', 'mt.mimetype')
-            ->from('filecache', 'fc')
-            ->leftJoin('fc', 'mimetypes', 'mt', $qb->expr()->eq('fc.mimetype', 'mt.id'))
-            ->where($qb->expr()->eq('fc.storage', $qb->createNamedParameter($numericStorageId, IQueryBuilder::PARAM_INT)));
+        try {
+            $qb = $this->db->getQueryBuilder();
+            $qb->select('fc.fileid', 'fc.path', 'fc.mtime', 'mt.mimetype')
+                ->from('filecache', 'fc')
+                ->leftJoin('fc', 'mimetypes', 'mt', $qb->expr()->eq('fc.mimetype', 'mt.id'))
+                ->where($qb->expr()->eq('fc.storage', $qb->createNamedParameter($numericStorageId, IQueryBuilder::PARAM_INT)));
 
-        $result = $qb->executeQuery();
-        while ($row = $result->fetch()) {
-            yield $row;
+            $result = $qb->executeQuery();
+        } catch (\Throwable $e) {
+            // Raw query against oc_filecache - same schema-drift risk as
+            // getNumericStorageId(). Fail safe: yield nothing for this
+            // mount rather than crashing the whole scan.
+            $this->logUnexpectedError('iterateCacheEntries', $e);
+            return;
         }
-        $result->closeCursor();
+
+        try {
+            while ($row = $result->fetch()) {
+                yield $row;
+            }
+        } catch (\Throwable $e) {
+            $this->logUnexpectedError('iterateCacheEntries (fetch)', $e);
+        } finally {
+            $result->closeCursor();
+        }
     }
 
     /**
@@ -597,7 +724,23 @@ class MtimeFixService {
      * scan results at scale.
      */
     private function queryActualMtime(string $host, string $share, string $user, string $password, string $domain, string $root, string $internalPath): ?int {
+        try {
+            return $this->queryActualMtimeInner($host, $share, $user, $password, $domain, $root, $internalPath);
+        } catch (\Throwable $e) {
+            $this->logUnexpectedError('queryActualMtime', $e);
+            return null;
+        }
+    }
+
+    private function queryActualMtimeInner(string $host, string $share, string $user, string $password, string $domain, string $root, string $internalPath): ?int {
         $smbPath = trim(rtrim($root, '/') . '/' . ltrim($internalPath, '/'), '/');
+
+        if (!function_exists('exec')) {
+            $this->logMessage(self::MESSAGE_TYPE_ALLINFO_FAILED, 'nextcloud_smb_mtime_fix: exec() is disabled on this PHP install, cannot run allinfo for {path}', [
+                'path' => $smbPath,
+            ]);
+            return null;
+        }
 
         $cmd = sprintf(
             'smbclient %s -U %s -c %s 2>&1',

@@ -61,6 +61,17 @@ git pull
 Bump the `<version>` in `appinfo/info.xml` if you want Nextcloud/browsers to
 reliably bust their cache of this app's JS/CSS assets after pulling changes.
 
+## Failure handling
+
+Every operation that touches something outside this app's control (raw
+queries against Nextcloud's database, `files_external` internals, shelling
+out to `smbclient`) is wrapped so an unexpected failure - a Nextcloud/DB
+schema change, `exec()` disabled, an internal API changing shape - results
+in "log an error and do nothing" rather than a crash, a partial write, or
+any risk of disrupting the actual file write happening in Nextcloud core.
+These show up under the **Errors** log category on the settings page, and
+are also always written to PHP's native error log as a backstop.
+
 ## Known limitations / things worth verifying on your own setup
 
 - `allinfo` output parsing (used by the retroactive scan to read a file's
