@@ -128,7 +128,7 @@
         <input type="checkbox" id="smb-mtime-fix-live-recheck" class="checkbox" <?php p($_['liveRecheckEnabled'] ? 'checked' : ''); ?> />
         <label for="smb-mtime-fix-live-recheck">
             <strong><?php p($l->t('Live recheck before writing (default)')); ?></strong> &mdash;
-            <?php p($l->t('right before writing, re-reads the file\'s live mtime and confirms it still actually disagrees with the intended value. Skips the file if something else already fixed it since the scan ran, or if the current value can\'t be confirmed.')); ?>
+            <?php p($l->t('right before writing, confirms the file\'s mtime still actually disagrees with the intended value. With Live SMB read, reuses that scan\'s own reading instead of reading the file again (close enough - no extra smbclient call); with Database compare, does a fresh read, since the scan never took one. Skips the file if something else already fixed it, or if the current value can\'t be confirmed.')); ?>
         </label>
     </p>
     <p>

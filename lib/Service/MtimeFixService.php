@@ -635,6 +635,14 @@ class MtimeFixService {
                             'path' => $row['path'],
                             'cachedMtime' => (int)$row['mtime'],
                             'actualMtime' => $actualMtime,
+                            // Live SMB mode's actualMtime IS a live reading -
+                            // live recheck can reuse it as-is (per this
+                            // conversation: "close enough", not worth a
+                            // redundant second smbclient call moments later).
+                            // DB mode's actualMtime is storage_mtime, a
+                            // cached value, not a live reading - it still
+                            // needs a fresh read if recheck is enabled.
+                            'liveActualMtime' => $detectionMode !== self::DETECTION_MODE_DB,
                         ];
 
                         if ($limit > 0 && count($mismatches) >= $limit) {
@@ -736,7 +744,14 @@ class MtimeFixService {
      * apply the same way to a fix running immediately after the write
      * whose value it's correcting.
      *
-     * @param array{mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime?:int} $mismatch
+     * Live recheck only spends an actual smbclient call when the scan
+     * didn't already provide a live one: 'smb' detection mode's
+     * actualMtime is already a live reading from moments ago, so recheck
+     * reuses it rather than reading the same file twice - only 'db'
+     * mode's actualMtime (storage_mtime, a cached value) triggers a
+     * genuinely fresh read.
+     *
+     * @param array{mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime?:int, liveActualMtime?:bool} $mismatch
      * @return array{ok:bool, skipped:bool, dryRun:bool, message:string}
      */
     public function applyMismatch(array $mismatch): array {
@@ -760,23 +775,28 @@ class MtimeFixService {
 
             // actualMtime came from the scan that found this mismatch - a
             // live smbclient reading in 'smb' detection mode, or
-            // storage_mtime in 'db' mode. Not guaranteed to still be
-            // current (the share could have changed since), which is
-            // exactly what the two options below exist to check.
+            // storage_mtime in 'db' mode. liveActualMtime tells us which,
+            // so live recheck below only pays for a fresh read when it
+            // doesn't already have one.
             $previousMtime = isset($mismatch['actualMtime']) ? (int)$mismatch['actualMtime'] : null;
+            $isAlreadyLive = !empty($mismatch['liveActualMtime']);
 
             $liveRecheckEnabled = $this->isLiveRecheckEnabled();
             $neverForwardEnabled = $this->isNeverMoveForwardEnabled();
 
-            // The freshest "current" value we can use for both checks
-            // below. A live recheck always re-reads; otherwise "never
-            // move forward" falls back to whatever the scan already
-            // found rather than paying for its own extra read - only
-            // reading live here if neither is available, so it always
-            // has something to compare against.
             $currentValue = $previousMtime;
 
-            if ($liveRecheckEnabled || ($neverForwardEnabled && $currentValue === null)) {
+            // Only spend an actual smbclient call when we don't already
+            // have a live reading: 'smb' detection mode's actualMtime is
+            // already live, from moments ago - re-reading the same file
+            // again here would be a redundant second call, so live
+            // recheck reuses it as-is instead ("close enough" - per this
+            // conversation). A fresh read is only genuinely needed when
+            // the existing value is a cached one ('db' mode's
+            // storage_mtime) or missing entirely.
+            $needsFreshRead = ($liveRecheckEnabled && !$isAlreadyLive) || ($neverForwardEnabled && $currentValue === null);
+
+            if ($needsFreshRead) {
                 $freshValue = $this->queryActualMtime(
                     $conn['host'], $conn['share'], $conn['user'], $conn['password'], $conn['domain'], $conn['root'], $mismatch['path']
                 );
@@ -789,11 +809,14 @@ class MtimeFixService {
                     // than write without confirmation.
                     return $this->skipMismatch($mismatch['path'], 'could not read the current mtime to confirm against - skipped rather than write unconfirmed');
                 }
+            }
 
-                if ($liveRecheckEnabled && abs($currentValue - $intendedMtime) <= self::MISMATCH_THRESHOLD_SECONDS) {
-                    // Already matches - something else fixed it since the scan ran.
-                    return $this->skipMismatch($mismatch['path'], 'already matches the intended mtime - skipped (fixed by something else since the scan ran)');
-                }
+            if ($liveRecheckEnabled && $currentValue !== null && abs($currentValue - $intendedMtime) <= self::MISMATCH_THRESHOLD_SECONDS) {
+                // Already matches - something else fixed it since the scan
+                // ran (or, in 'smb' mode with a reused reading, it was
+                // already correct at scan time - this can't fire there
+                // since nothing new was read to change the answer).
+                return $this->skipMismatch($mismatch['path'], 'already matches the intended mtime - skipped (fixed by something else since the scan ran)');
             }
 
             if ($neverForwardEnabled && $currentValue !== null && $intendedMtime > $currentValue) {

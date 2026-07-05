@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.8
+- Fixed: Live recheck was doing a redundant `smbclient` read even when
+  the scan (in Live SMB read mode) had already taken a live reading
+  moments earlier - three calls per applied file (scan read, recheck
+  read, write) instead of two. It now reuses that scan-time reading as-is
+  when it's already live, only doing a genuinely fresh read when the
+  existing value is a cached one (Database compare's `storage_mtime`) or
+  missing entirely. Each mismatch now carries a `liveActualMtime` flag so
+  `applyMismatch()` can tell the difference.
+
 ## 0.5.7
 - **Database compare is now the default detection mode** (was Live SMB
   read). Checkbox/radio labels simplified from "(default on)" to
