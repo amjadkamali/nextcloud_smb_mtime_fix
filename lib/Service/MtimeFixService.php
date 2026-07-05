@@ -635,7 +635,7 @@ class MtimeFixService {
      * that governs every write path in the app instead of the retroactive
      * flows being a special always-real-writes case.
      *
-     * @param array{mountId:int, fileId:int, path:string, cachedMtime:int} $mismatch
+     * @param array{mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime?:int} $mismatch
      * @return array{ok:bool, dryRun:bool, message:string}
      */
     public function applyMismatch(array $mismatch): array {
@@ -655,7 +655,14 @@ class MtimeFixService {
                 'root' => trim($options['root'] ?? '', '/'),
             ];
 
-            return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], $this->isDryRunEnabled());
+            // actualMtime came from the scan that found this mismatch - the
+            // wrong value that was actually on the share at that moment.
+            // Not guaranteed to still be current (the share could have
+            // changed since), but it's what we're correcting away from, so
+            // worth reporting even if slightly stale.
+            $previousMtime = isset($mismatch['actualMtime']) ? (int)$mismatch['actualMtime'] : null;
+
+            return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], $this->isDryRunEnabled(), $previousMtime);
         } catch (\Throwable $e) {
             $this->logUnexpectedError('applyMismatch', $e);
             return ['ok' => false, 'dryRun' => false, 'message' => 'unexpected error - see log'];
@@ -668,11 +675,17 @@ class MtimeFixService {
 
     /**
      * @param array{host:string,share:string,user:string,password:string,domain:string,root:string} $conn
+     * @param int|null $previousMtime The value found actually on the share
+     *     before this fix, if known (only the retroactive scan/apply path
+     *     knows this, from its earlier comparison - the real-time listener
+     *     corrects mtime immediately after a write without ever reading
+     *     the share's prior value, so it always passes null here). When
+     *     known, messages report "from X to Y"; otherwise just "to Y".
      * @return array{ok:bool, dryRun:bool, message:string}
      */
-    private function applyFix(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun): array {
+    private function applyFix(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun, ?int $previousMtime = null): array {
         try {
-            return $this->applyFixInner($conn, $internalPath, $intendedMtime, $fileId, $dryRun);
+            return $this->applyFixInner($conn, $internalPath, $intendedMtime, $fileId, $dryRun, $previousMtime);
         } catch (\Throwable $e) {
             // Safety net: whatever this was - a files_external internal
             // that changed shape, a DB error from a schema we don't
@@ -684,7 +697,7 @@ class MtimeFixService {
         }
     }
 
-    private function applyFixInner(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun): array {
+    private function applyFixInner(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun, ?int $previousMtime = null): array {
         ['host' => $host, 'share' => $share, 'user' => $user, 'password' => $password,
             'domain' => $domain, 'root' => $root] = $conn;
 
@@ -695,14 +708,15 @@ class MtimeFixService {
         // your UTC offset. Test on one file first with
         // `smbclient -c "allinfo <path>"` before trusting this broadly.
         $smbTime = gmdate('Y:m:d-H:i:s', $intendedMtime);
+        $fromSuffix = $previousMtime !== null ? (' from ' . gmdate('Y-m-d H:i:s', $previousMtime) . ' UTC') : '';
 
         if ($dryRun) {
             $this->logMessage(
                 self::MESSAGE_TYPE_DRY_RUN,
-                'nextcloud_smb_mtime_fix: [dry-run] would set mtime for {path} to {time}',
-                ['path' => $smbPath, 'time' => $smbTime]
+                'nextcloud_smb_mtime_fix: [dry-run] would set mtime for {path}{from} to {time}',
+                ['path' => $smbPath, 'from' => $fromSuffix, 'time' => $smbTime]
             );
-            return ['ok' => true, 'dryRun' => true, 'message' => "would set mtime to {$smbTime}"];
+            return ['ok' => true, 'dryRun' => true, 'message' => "would set mtime{$fromSuffix} to {$smbTime}"];
         }
 
         if (!function_exists('exec')) {
@@ -750,11 +764,11 @@ class MtimeFixService {
 
         $this->logMessage(
             self::MESSAGE_TYPE_SUCCESS,
-            'nextcloud_smb_mtime_fix: corrected mtime for {path} to {time}',
-            ['path' => $smbPath, 'time' => $smbTime]
+            'nextcloud_smb_mtime_fix: corrected mtime for {path}{from} to {time}',
+            ['path' => $smbPath, 'from' => $fromSuffix, 'time' => $smbTime]
         );
 
-        return ['ok' => true, 'dryRun' => false, 'message' => 'mtime corrected'];
+        return ['ok' => true, 'dryRun' => false, 'message' => "mtime corrected{$fromSuffix} to {$smbTime}"];
     }
 
     // ---------------------------------------------------------------

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+- Retroactive apply's success and dry-run log messages now report the
+  mtime being corrected *from*, not just what it's being set *to* (e.g.
+  "corrected mtime for {path} from 2020-01-01 12:00:00 UTC to
+  2025-06-15 09:30:00 UTC"). Only available on the retroactive scan/apply
+  path, which knows the previous on-share value from its scan comparison
+  - the real-time listener corrects mtime immediately after a write
+  without ever reading a prior value, so it still only reports the target
+  time. Log-only; nothing shown in the admin UI changed.
+
 ## 0.5.3
 - Documentation update: the `allinfo` write_time parsing has now been
   confirmed against a live server via the Advanced diagnostic tool - the
