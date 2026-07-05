@@ -827,19 +827,22 @@ class MtimeFixService {
      *
      * PARSING NOTES: Samba's own test suite confirms `allinfo` prints the
      * literal sentinel "NTTIME(0)" for a genuinely zero/unset timestamp -
-     * we treat that as mtime 0. For a normal (non-zero) timestamp, some
-     * smbclient builds print a human-readable date (the same asctime-style
-     * format used by `dir`/`ls`), and some additionally append the raw
-     * epoch in parentheses. This parses both: it prefers the parenthesized
-     * epoch when present (unambiguous), and otherwise falls back to
-     * strtotime() on the human-readable portion.
+     * we treat that as mtime 0. For a normal (non-zero) timestamp:
      *
-     * STILL WORTH A QUICK CHECK: exact `allinfo` formatting has drifted
-     * across Samba versions, and I couldn't fully confirm the non-zero
-     * case byte-for-byte against a live server. Use the "Test allinfo
-     * parsing" tool under Advanced on the admin page (or debugAllinfo()
-     * below) to confirm this against your actual server before trusting
-     * scan results at scale.
+     * CONFIRMED (via the "Test allinfo parsing" tool under Advanced on the
+     * admin page, against a live server): the plain human-readable form,
+     * with an explicit timezone abbreviation appended - e.g.
+     * `write_time: Sat Jul  4 23:02:35 2026 UTC` - parsed correctly by the
+     * strtotime() fallback below, including correctly honoring the
+     * trailing zone name to produce the right absolute instant.
+     *
+     * STILL UNCONFIRMED: some smbclient builds are reported to
+     * additionally append the raw epoch in parentheses after the human-
+     * readable date. Kept as a preferred, unambiguous parsing path when
+     * present, but it hasn't actually been observed against a real server
+     * yet - if your `allinfo` output looks meaningfully different from
+     * the confirmed form above, use the diagnostic tool to check which
+     * path your server takes rather than assuming.
      */
     private function queryActualMtime(string $host, string $share, string $user, string $password, string $domain, string $root, string $internalPath): ?int {
         try {

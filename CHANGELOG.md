@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3
+- Documentation update: the `allinfo` write_time parsing has now been
+  confirmed against a live server via the Advanced diagnostic tool - the
+  plain human-readable form with a trailing timezone abbreviation (e.g.
+  `Sat Jul  4 23:02:35 2026 UTC`) parses correctly, including honoring the
+  timezone label to produce the right absolute instant. The
+  epoch-in-parentheses variant remains a defensive fallback but is still
+  unconfirmed in the wild. No code changes, just replacing "unverified"
+  language with what's actually been checked.
+
 ## 0.5.2
 - New collapsed "Advanced" section on the admin page with a "Test allinfo
   parsing" tool: pick a mount and a file path, and it runs the exact same
