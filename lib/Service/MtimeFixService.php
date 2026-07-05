@@ -125,10 +125,7 @@ class MtimeFixService {
     public const DETECTION_MODES = [self::DETECTION_MODE_SMB, self::DETECTION_MODE_DB];
 
     /**
-     * 'smb' (default): scan reads each file's real mtime live off the
-     * share via smbclient, compared against the displayed `mtime` -
-     * slow (one smbclient call per file) but always current at scan time.
-     * 'db': scan compares two already-cached DB columns
+     * 'db' (default): scan compares two already-cached DB columns
      * (`mtime` vs `storage_mtime`) with a single query, no smbclient
      * calls during scanning at all - much faster, but `storage_mtime` is
      * only as fresh as whenever Nextcloud last looked, not a live
@@ -138,15 +135,18 @@ class MtimeFixService {
      * already fixed by something else since the scan ran - a real
      * improvement, not a hard dependency this mode can't function
      * without.
+     * 'smb': scan reads each file's real mtime live off the
+     * share via smbclient, compared against the displayed `mtime` -
+     * slow (one smbclient call per file) but always current at scan time.
      */
     public function getDetectionMode(): string {
-        $mode = $this->config->getAppValue(self::APP_ID, 'detection_mode', self::DETECTION_MODE_SMB);
-        return in_array($mode, self::DETECTION_MODES, true) ? $mode : self::DETECTION_MODE_SMB;
+        $mode = $this->config->getAppValue(self::APP_ID, 'detection_mode', self::DETECTION_MODE_DB);
+        return in_array($mode, self::DETECTION_MODES, true) ? $mode : self::DETECTION_MODE_DB;
     }
 
     public function setDetectionMode(string $mode): void {
         if (!in_array($mode, self::DETECTION_MODES, true)) {
-            $mode = self::DETECTION_MODE_SMB;
+            $mode = self::DETECTION_MODE_DB;
         }
         $this->config->setAppValue(self::APP_ID, 'detection_mode', $mode);
     }
@@ -550,6 +550,9 @@ class MtimeFixService {
      * @param int|null $mountId Restrict the scan to one specific mount
      *     (its files_external config id, as returned by listSmbMounts());
      *     null means every configured SMB mount.
+     * @param string $pathFilter Optional folder path, relative to the
+     *     mount root (e.g. "Photos/2020") - restricts the scan to that
+     *     folder and everything under it. Empty means the whole mount.
      * @return array{
      *     mismatches: list<array{storageId:string, mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime:int}>,
      *     cursor: array{mountIndex:int, afterFileId:int}|null,
@@ -557,10 +560,11 @@ class MtimeFixService {
      *     detectionMode: string
      * }
      */
-    public function scanForMismatchesBatch(array $cursor, int $limit, int $batchSize, ?int $mountId = null): array {
+    public function scanForMismatchesBatch(array $cursor, int $limit, int $batchSize, ?int $mountId = null, string $pathFilter = ''): array {
         $mismatches = [];
         $examined = 0;
         $detectionMode = $this->getDetectionMode();
+        $pathFilter = trim($pathFilter, "/ \t\n\r\0\x0B");
 
         try {
             $mounts = $this->getOrderedSmbMounts();
@@ -599,7 +603,7 @@ class MtimeFixService {
                 }
 
                 $remaining = $batchSize - $examined;
-                $rows = $this->fetchCacheEntriesPage($numericId, $afterFileId, $remaining);
+                $rows = $this->fetchCacheEntriesPage($numericId, $afterFileId, $remaining, $pathFilter);
 
                 foreach ($rows as $row) {
                     $examined++;
@@ -967,9 +971,15 @@ class MtimeFixService {
      * go. Includes storage_mtime alongside mtime so 'db' detection mode
      * can compare the two without any further query.
      *
+     * $pathPrefix (already normalized - no leading/trailing slashes),
+     * when non-empty, restricts results to that folder itself plus
+     * everything under it. `filecache.path` is relative to the mount's
+     * own root, not the raw SMB share, so this is a straightforward
+     * prefix match - no interaction with the SMB "root" backend option.
+     *
      * @return list<array{fileid:int|string, path:string, mtime:int|string, storage_mtime:int|string, mimetype:?string}>
      */
-    private function fetchCacheEntriesPage(int $numericStorageId, int $afterFileId, int $maxRows): array {
+    private function fetchCacheEntriesPage(int $numericStorageId, int $afterFileId, int $maxRows, string $pathPrefix = ''): array {
         try {
             $qb = $this->db->getQueryBuilder();
             $qb->select('fc.fileid', 'fc.path', 'fc.mtime', 'fc.storage_mtime', 'mt.mimetype')
@@ -979,6 +989,19 @@ class MtimeFixService {
                 ->andWhere($qb->expr()->gt('fc.fileid', $qb->createNamedParameter($afterFileId, IQueryBuilder::PARAM_INT)))
                 ->orderBy('fc.fileid', 'ASC')
                 ->setMaxResults(max(1, $maxRows));
+
+            if ($pathPrefix !== '') {
+                // Escape LIKE's own wildcard characters in the folder name
+                // itself (a literal % or _ in a real folder name shouldn't
+                // be treated as a pattern) - best-effort across Nextcloud's
+                // three supported DB engines, not exhaustively verified on
+                // all of them.
+                $escaped = addcslashes($pathPrefix, '\\_%');
+                $qb->andWhere($qb->expr()->orX(
+                    $qb->expr()->eq('fc.path', $qb->createNamedParameter($pathPrefix)),
+                    $qb->expr()->like('fc.path', $qb->createNamedParameter($escaped . '/%'))
+                ));
+            }
 
             $result = $qb->executeQuery();
             $rows = [];

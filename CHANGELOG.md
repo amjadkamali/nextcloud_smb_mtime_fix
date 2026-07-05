@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.7
+- **Database compare is now the default detection mode** (was Live SMB
+  read). Checkbox/radio labels simplified from "(default on)" to
+  "(default)", and the Database compare description now explicitly notes
+  that Live recheck additionally catches files modified since the last
+  scan ran.
+- New **Folder (optional)** field under Options: restricts a scan to one
+  path within the mount (e.g. `Photos/2020`) and everything under it,
+  instead of always scanning the whole mount. Implemented as a `path`
+  prefix match directly in the paginated query, so it works cleanly with
+  the existing resumable-cursor scanning and needs no changes there.
+  Works alongside the existing mount dropdown in both "Scan for
+  mismatches" and "Scan & fix all automatically".
+
 ## 0.5.6
 - Fixed: the new "skipped" log category was missing from the admin
   page's label list, showing the raw lowercase key instead of a proper

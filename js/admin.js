@@ -12,6 +12,7 @@
         var logLevelStatus = document.getElementById('smb-mtime-fix-log-level-msg');
         var scanBtn = document.getElementById('smb-mtime-fix-scan');
         var scanLimitInput = document.getElementById('smb-mtime-fix-scan-limit');
+        var pathFilterInput = document.getElementById('smb-mtime-fix-path-filter');
         var mountSelect = document.getElementById('smb-mtime-fix-mount-select');
         var scanStatus = document.getElementById('smb-mtime-fix-scan-status');
         var resultsWrap = document.getElementById('smb-mtime-fix-results');
@@ -54,6 +55,10 @@
         function getSelectedMountId() {
             var raw = mountSelect ? mountSelect.value : '';
             return raw === '' ? null : parseInt(raw, 10);
+        }
+
+        function getPathFilter() {
+            return pathFilterInput ? pathFilterInput.value.trim() : '';
         }
 
         // --- dry-run tri-state ------------------------------------------------
@@ -219,7 +224,7 @@
 
                 jsonFetch(apiUrl('/scan'), {
                     method: 'POST',
-                    body: JSON.stringify({ cursor: cursor, limit: remainingLimit, batchSize: 200, mountId: getSelectedMountId() }),
+                    body: JSON.stringify({ cursor: cursor, limit: remainingLimit, batchSize: 200, mountId: getSelectedMountId(), pathFilter: getPathFilter() }),
                 })
                     .then(function (data) {
                         examinedTotal += data.examined || 0;
@@ -541,7 +546,7 @@
                     // Always unlimited per scan batch - the fix-count limit
                     // is enforced below, across the whole run, not per batch.
                     method: 'POST',
-                    body: JSON.stringify({ cursor: cursor, limit: 0, batchSize: 200, mountId: getSelectedMountId() }),
+                    body: JSON.stringify({ cursor: cursor, limit: 0, batchSize: 200, mountId: getSelectedMountId(), pathFilter: getPathFilter() }),
                 })
                     .then(function (scanData) {
                         examined += scanData.examined || 0;

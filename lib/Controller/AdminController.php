@@ -99,7 +99,9 @@ class AdminController extends Controller {
             $mountIdParam = $this->request->getParam('mountId', null);
             $mountId = ($mountIdParam !== null && $mountIdParam !== '') ? (int)$mountIdParam : null;
 
-            $result = $this->service->scanForMismatchesBatch($cursor, max($limit, 0), $batchSize, $mountId);
+            $pathFilter = trim((string)$this->request->getParam('pathFilter', ''));
+
+            $result = $this->service->scanForMismatchesBatch($cursor, max($limit, 0), $batchSize, $mountId, $pathFilter);
             return new JSONResponse($result);
         });
     }
@@ -162,7 +164,7 @@ class AdminController extends Controller {
 
             switch ($key) {
                 case 'detectionMode':
-                    $this->service->setDetectionMode((string)$this->request->getParam('value', MtimeFixService::DETECTION_MODE_SMB));
+                    $this->service->setDetectionMode((string)$this->request->getParam('value', MtimeFixService::DETECTION_MODE_DB));
                     break;
                 case 'liveRecheck':
                     $this->service->setLiveRecheckEnabled((bool)$this->request->getParam('value', true));
