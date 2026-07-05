@@ -23,3 +23,12 @@
     margin-left: 0.5em;
     opacity: 0.8;
 }
+
+#smb-mtime-fix-settings tr.smb-mtime-fix-row-fixed {
+    opacity: 0.55;
+}
+
+#smb-mtime-fix-settings .smb-mtime-fix-row-status {
+    font-style: italic;
+    opacity: 0.85;
+}

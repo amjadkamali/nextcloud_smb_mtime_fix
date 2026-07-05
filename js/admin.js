@@ -179,6 +179,7 @@
             lastMismatches = [];
             scanCancelled = false;
             autoStatus.textContent = '';
+            applyStatus.textContent = '';
 
             var limitRaw = scanLimitInput ? scanLimitInput.value.trim() : '';
             var limit = 0;
@@ -273,9 +274,9 @@
             resultsWrap.style.display = '';
         }
 
-        // Sets the Status column text for one row - used for skip reasons
-        // and failure messages, neither of which remove the row (only a
-        // real, successful write does that, via removeResultRow below).
+        // Sets the Status column text for one row - used for skip reasons,
+        // failure messages, and the "Fixed" label after a successful write
+        // (see markRowFixed below).
         function setRowStatus(path, text) {
             var row = resultsBody.querySelector('tr[data-path="' + CSS.escape(path) + '"]');
             if (!row) {
@@ -287,12 +288,15 @@
             }
         }
 
-        // Removes a single fixed file's row from the table (and marks it null
-        // in lastMismatches so it's skipped if the admin clicks Apply again
-        // without re-scanning). Leaves failed/skipped rows in place so
-        // they stay visible and selectable for a retry, with a reason in
-        // the Status column via setRowStatus().
-        function removeResultRow(path) {
+        // A successful real write keeps its row instead of removing it, so
+        // the table stays a full record of every file the scan found and
+        // what happened to it - not just the ones that didn't get fixed.
+        // The checkbox is unchecked and disabled so a fixed row can't be
+        // accidentally re-applied if "Update selected files" is clicked
+        // again without a fresh scan. lastMismatches is still nulled out
+        // for the same reason, belt-and-suspenders. Everything clears on
+        // the next scan or a switch to auto-fix, same as before.
+        function markRowFixed(path) {
             var idx = lastMismatches.findIndex(function (m) {
                 return m && m.path === path;
             });
@@ -300,17 +304,23 @@
                 lastMismatches[idx] = null;
             }
             var row = resultsBody.querySelector('tr[data-path="' + CSS.escape(path) + '"]');
-            if (row) {
-                row.remove();
+            if (!row) {
+                return;
             }
-            if (!resultsBody.querySelector('tr')) {
-                resultsWrap.style.display = 'none';
+            var checkbox = row.querySelector('.smb-mtime-fix-row');
+            if (checkbox) {
+                checkbox.checked = false;
+                checkbox.disabled = true;
             }
+            row.classList.add('smb-mtime-fix-row-fixed');
+            setRowStatus(path, t('nextcloud_smb_mtime_fix', 'Fixed'));
         }
 
         selectAll.addEventListener('change', function () {
             resultsBody.querySelectorAll('.smb-mtime-fix-row').forEach(function (cb) {
-                cb.checked = selectAll.checked;
+                if (!cb.disabled) {
+                    cb.checked = selectAll.checked;
+                }
             });
         });
 
@@ -367,7 +377,7 @@
                                 setRowStatus(r.path, t('nextcloud_smb_mtime_fix', 'Dry-run: {message}', { message: r.message }));
                             } else if (r.ok) {
                                 okCount++;
-                                removeResultRow(r.path);
+                                markRowFixed(r.path);
                             } else {
                                 failCount++;
                                 setRowStatus(r.path, t('nextcloud_smb_mtime_fix', 'Failed: {message}', { message: r.message }));
@@ -392,7 +402,7 @@
         applyBtn.addEventListener('click', function () {
             var selected = [];
             resultsBody.querySelectorAll('.smb-mtime-fix-row').forEach(function (cb) {
-                if (cb.checked) {
+                if (cb.checked && !cb.disabled) {
                     selected.push(lastMismatches[parseInt(cb.dataset.index, 10)]);
                 }
             });
@@ -490,6 +500,7 @@
             resultsBody.innerHTML = '';
             lastMismatches = [];
             scanStatus.textContent = '';
+            applyStatus.textContent = '';
 
             var limitRaw = scanLimitInput ? scanLimitInput.value.trim() : '';
             var fixLimit = 0;

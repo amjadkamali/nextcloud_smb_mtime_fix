@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.9
+- Renamed the top log level from "Critical" to "Fatal" - matches
+  Nextcloud's own `occ log:manage`/config.php terminology for that level,
+  even though it's the same underlying PSR-3 `critical()` call.
+- Successful writes in "Update selected files" no longer remove their row
+  from the results table - they stay, marked "Fixed" in the Status
+  column, with the checkbox unchecked and disabled so a fixed row can't
+  be accidentally re-applied. The table now reads as a full record of
+  what happened to every scanned file, not just the ones that didn't get
+  fixed. Fixed rows are dimmed via CSS to stay visually distinct.
+  Everything still clears on a new scan or a switch to auto-fix, as
+  before.
+- Fixed: the "X/Y updated" apply-status line never cleared when starting
+  a new scan or switching to auto-fix, leaving stale text next to fresh
+  results. Now clears alongside everything else that already resets at
+  those points.
+
 ## 0.5.8
 - Fixed: Live recheck was doing a redundant `smbclient` read even when
   the scan (in Live SMB read mode) had already taken a live reading
@@ -76,6 +93,9 @@
   - the real-time listener corrects mtime immediately after a write
   without ever reading a prior value, so it still only reports the target
   time. Log-only; nothing shown in the admin UI changed.
+- Synced `js/admin.js` and `templates/admin.php` with hand-edited changes
+  made directly on GitHub (simplified confirm-dialog wording on both the
+  manual apply and auto-fix buttons).
 
 ## 0.5.3
 - Documentation update: the `allinfo` write_time parsing has now been

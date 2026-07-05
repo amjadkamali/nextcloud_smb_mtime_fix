@@ -59,7 +59,7 @@
         1 => $l->t('Info'),
         2 => $l->t('Warning'),
         3 => $l->t('Error'),
-        4 => $l->t('Critical'),
+        4 => $l->t('Fatal'),
     ];
     ?>
     <table class="grid" style="max-width: 700px;">
