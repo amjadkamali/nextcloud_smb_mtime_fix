@@ -187,12 +187,13 @@ class AdminController extends Controller {
         return $this->runSafely(function () {
             $mountId = (int)$this->request->getParam('mountId', '0');
             $command = (string)$this->request->getParam('command', '');
+            $directory = (string)$this->request->getParam('directory', '');
 
             if ($mountId <= 0 || trim($command) === '') {
                 return new JSONResponse(['ok' => false, 'message' => 'mountId and command are required'], Http::STATUS_BAD_REQUEST);
             }
 
-            return new JSONResponse($this->service->debugRawCommand($mountId, $command));
+            return new JSONResponse($this->service->debugRawCommand($mountId, $command, $directory));
         });
     }
 }

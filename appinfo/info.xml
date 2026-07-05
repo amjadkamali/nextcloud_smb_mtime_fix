@@ -15,7 +15,7 @@
     installed, review the list, and apply fixes on demand. A dry-run mode
     (enabled by default) lets you verify behavior via the log before letting
     the app write anything.</description>
-    <version>0.5.4</version>
+    <version>0.5.6</version>
     <licence>mit</licence>
     <author>amjadkamali</author>
     <namespace>SmbMtimeFix</namespace>
