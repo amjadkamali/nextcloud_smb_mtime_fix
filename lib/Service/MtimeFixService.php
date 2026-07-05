@@ -875,23 +875,6 @@ class MtimeFixService {
     }
 
     /**
-     * Builds the exact smbclient command line, either for real execution
-     * or as a password-redacted preview to show an admin exactly what was
-     * (or would be) run - the two must be built by the identical code path
-     * so the preview can never lie about what actually executes.
-     */
-    private function buildSmbclientCommandLine(string $host, string $share, string $user, string $password, string $domain, string $directoryFlag, string $cArg): string {
-        return sprintf(
-            'smbclient %s -t %d -U %s %s-c %s',
-            escapeshellarg('//' . $host . '/' . $share),
-            self::SMBCLIENT_TIMEOUT_SECONDS,
-            escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
-            $directoryFlag,
-            escapeshellarg($cArg)
-        );
-    }
-
-    /**
      * Runs `smbclient allinfo` for one file and returns the raw output
      * without attempting to parse it. Shared by queryActualMtime() (the
      * real scan path) and debugAllinfo() (the admin page's diagnostic
@@ -904,7 +887,7 @@ class MtimeFixService {
      * see the "Test allinfo parsing" tool under Advanced). The real scan
      * always uses the default (double quotes, matching current behavior).
      *
-     * @return array{ok:bool, output:list<string>, message:string, commandArg:string, fullCommand:string}
+     * @return array{ok:bool, output:list<string>, message:string, commandArg:string}
      */
     private function runAllinfo(string $host, string $share, string $user, string $password, string $domain, string $smbPath, string $pathQuoteChar = '"'): array {
         if (!in_array($pathQuoteChar, ['"', "'"], true)) {
@@ -912,20 +895,25 @@ class MtimeFixService {
         }
 
         $commandArg = 'allinfo ' . $pathQuoteChar . $smbPath . $pathQuoteChar;
-        $fullCommand = $this->buildSmbclientCommandLine($host, $share, $user, '********', $domain, '', $commandArg);
 
         if (!function_exists('exec')) {
-            return ['ok' => false, 'output' => [], 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)', 'commandArg' => $commandArg, 'fullCommand' => $fullCommand];
+            return ['ok' => false, 'output' => [], 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)', 'commandArg' => $commandArg];
         }
 
-        $cmd = $this->buildSmbclientCommandLine($host, $share, $user, $password, $domain, '', $commandArg) . ' 2>&1';
+        $cmd = sprintf(
+            'smbclient %s -t %d -U %s -c %s 2>&1',
+            escapeshellarg('//' . $host . '/' . $share),
+            self::SMBCLIENT_TIMEOUT_SECONDS,
+            escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
+            escapeshellarg($commandArg)
+        );
 
         exec($cmd, $output, $exitCode);
         if ($exitCode !== 0) {
-            return ['ok' => false, 'output' => $output, 'message' => 'smbclient exited with code ' . $exitCode, 'commandArg' => $commandArg, 'fullCommand' => $fullCommand];
+            return ['ok' => false, 'output' => $output, 'message' => 'smbclient exited with code ' . $exitCode, 'commandArg' => $commandArg];
         }
 
-        return ['ok' => true, 'output' => $output, 'message' => '', 'commandArg' => $commandArg, 'fullCommand' => $fullCommand];
+        return ['ok' => true, 'output' => $output, 'message' => '', 'commandArg' => $commandArg];
     }
 
     /**
@@ -986,15 +974,14 @@ class MtimeFixService {
      *     matchedLine: string|null,
      *     method: string|null,
      *     message: string,
-     *     commandArg: string|null,
-     *     fullCommand: string|null
+     *     commandArg: string|null
      * }
      */
     public function debugAllinfo(int $mountId, string $path, string $pathQuoteChar = '"'): array {
         try {
             $mountConfig = $this->globalStoragesService->getStorage($mountId);
             if ($mountConfig === null) {
-                return $this->debugAllinfoResult(false, '', null, null, null, 'mount config not found', null, null);
+                return $this->debugAllinfoResult(false, '', null, null, null, 'mount config not found', null);
             }
 
             $options = $mountConfig->getBackendOptions();
@@ -1009,7 +996,7 @@ class MtimeFixService {
 
             $result = $this->runAllinfo($host, $share, $user, $password, $domain, $smbPath, $pathQuoteChar);
             if (!$result['ok']) {
-                return $this->debugAllinfoResult(false, implode("\n", $result['output']), null, null, null, $result['message'], $result['commandArg'] ?? null, $result['fullCommand'] ?? null);
+                return $this->debugAllinfoResult(false, implode("\n", $result['output']), null, null, null, $result['message'], $result['commandArg'] ?? null);
             }
 
             $rawOutput = implode("\n", $result['output']);
@@ -1022,19 +1009,18 @@ class MtimeFixService {
                 $parsed['matchedLine'],
                 $parsed['method'],
                 $parsed['mtime'] !== null ? 'parsed successfully' : 'could not parse a write_time from the output - see raw output',
-                $result['commandArg'] ?? null,
-                $result['fullCommand'] ?? null
+                $result['commandArg'] ?? null
             );
         } catch (\Throwable $e) {
             $this->logUnexpectedError('debugAllinfo', $e);
-            return $this->debugAllinfoResult(false, '', null, null, null, 'unexpected error - see log', null, null);
+            return $this->debugAllinfoResult(false, '', null, null, null, 'unexpected error - see log', null);
         }
     }
 
     /**
-     * @return array{ok:bool, rawOutput:string, parsedMtime:int|null, parsedMtimeFormatted:string|null, matchedLine:string|null, method:string|null, message:string, commandArg:string|null, fullCommand:string|null}
+     * @return array{ok:bool, rawOutput:string, parsedMtime:int|null, parsedMtimeFormatted:string|null, matchedLine:string|null, method:string|null, message:string, commandArg:string|null}
      */
-    private function debugAllinfoResult(bool $ok, string $rawOutput, ?int $mtime, ?string $matchedLine, ?string $method, string $message, ?string $commandArg, ?string $fullCommand): array {
+    private function debugAllinfoResult(bool $ok, string $rawOutput, ?int $mtime, ?string $matchedLine, ?string $method, string $message, ?string $commandArg): array {
         return [
             'ok' => $ok,
             'rawOutput' => $rawOutput,
@@ -1044,7 +1030,6 @@ class MtimeFixService {
             'method' => $method,
             'message' => $message,
             'commandArg' => $commandArg,
-            'fullCommand' => $fullCommand,
         ];
     }
 
@@ -1055,17 +1040,6 @@ class MtimeFixService {
      * can be tried from the admin page while iterating on a fix - without
      * needing a new app release for every variant someone wants to test.
      *
-     * $initialDirectory maps to smbclient's own `-D` flag - a genuine
-     * top-level command-line argument, parsed separately from whatever is
-     * inside the `-c` string. Community reports (e.g. a 2004 Samba
-     * mailing list thread) confirm `-c "ls Some Folder"` fails on spaces
-     * the same way we've seen, while `-D "Some Folder" -c ls` works -
-     * because `-D`'s value never passes through the same (apparently
-     * broken) internal tokenizer that mangles arguments inside `-c`. This
-     * likely only fixes spaces in directory names, not in a final
-     * filename itself, since the filename still has to go through `-c`
-     * one way or another.
-     *
      * UNLIKE debugAllinfo(): this does NOT prepend the mount's configured
      * root folder to anything - the command is passed through exactly as
      * typed, so include the root yourself if your path needs it. It also
@@ -1074,13 +1048,13 @@ class MtimeFixService {
      * for debugging, gated behind admin-only access the same as every
      * other endpoint here, not something to leave running unattended.
      *
-     * @return array{ok:bool, output:string, message:string, commandArg:string, fullCommand:string}
+     * @return array{ok:bool, output:string, message:string, commandArg:string}
      */
-    public function debugRawCommand(int $mountId, string $rawCommand, string $initialDirectory = ''): array {
+    public function debugRawCommand(int $mountId, string $rawCommand): array {
         try {
             $mountConfig = $this->globalStoragesService->getStorage($mountId);
             if ($mountConfig === null) {
-                return ['ok' => false, 'output' => '', 'message' => 'mount config not found', 'commandArg' => $rawCommand, 'fullCommand' => ''];
+                return ['ok' => false, 'output' => '', 'message' => 'mount config not found', 'commandArg' => $rawCommand];
             }
 
             $options = $mountConfig->getBackendOptions();
@@ -1090,14 +1064,17 @@ class MtimeFixService {
             $password = $options['password'] ?? '';
             $domain = $options['domain'] ?? '';
 
-            $directoryFlag = $initialDirectory !== '' ? ('-D ' . escapeshellarg($initialDirectory) . ' ') : '';
-            $fullCommand = $this->buildSmbclientCommandLine($host, $share, $user, '********', $domain, $directoryFlag, $rawCommand);
-
             if (!function_exists('exec')) {
-                return ['ok' => false, 'output' => '', 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)', 'commandArg' => $rawCommand, 'fullCommand' => $fullCommand];
+                return ['ok' => false, 'output' => '', 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)', 'commandArg' => $rawCommand];
             }
 
-            $cmd = $this->buildSmbclientCommandLine($host, $share, $user, $password, $domain, $directoryFlag, $rawCommand) . ' 2>&1';
+            $cmd = sprintf(
+                'smbclient %s -t %d -U %s -c %s 2>&1',
+                escapeshellarg('//' . $host . '/' . $share),
+                self::SMBCLIENT_TIMEOUT_SECONDS,
+                escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
+                escapeshellarg($rawCommand)
+            );
 
             exec($cmd, $output, $exitCode);
 
@@ -1106,11 +1083,10 @@ class MtimeFixService {
                 'output' => implode("\n", $output),
                 'message' => $exitCode === 0 ? 'smbclient exited with code 0' : ('smbclient exited with code ' . $exitCode),
                 'commandArg' => $rawCommand,
-                'fullCommand' => $fullCommand,
             ];
         } catch (\Throwable $e) {
             $this->logUnexpectedError('debugRawCommand', $e);
-            return ['ok' => false, 'output' => '', 'message' => 'unexpected error - see log', 'commandArg' => $rawCommand, 'fullCommand' => ''];
+            return ['ok' => false, 'output' => '', 'message' => 'unexpected error - see log', 'commandArg' => $rawCommand];
         }
     }
 }

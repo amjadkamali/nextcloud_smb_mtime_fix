@@ -542,7 +542,7 @@
                     .then(function (data) {
                         debugStatus.textContent = '';
                         debugResult.style.display = '';
-                        debugCommand.textContent = data.fullCommand || t('nextcloud_smb_mtime_fix', '(not available)');
+                        debugCommand.textContent = data.commandArg || t('nextcloud_smb_mtime_fix', '(not available)');
                         debugRaw.textContent = data.rawOutput || t('nextcloud_smb_mtime_fix', '(no output)');
                         debugLine.textContent = data.matchedLine || t('nextcloud_smb_mtime_fix', '(none)');
 
@@ -569,12 +569,10 @@
 
         // --- advanced: run a raw smbclient command ------------------------------
 
-        var rawCmdDirInput = document.getElementById('smb-mtime-fix-rawcmd-dir');
         var rawCmdInput = document.getElementById('smb-mtime-fix-rawcmd-input');
         var rawCmdBtn = document.getElementById('smb-mtime-fix-rawcmd-btn');
         var rawCmdStatus = document.getElementById('smb-mtime-fix-rawcmd-status');
         var rawCmdResult = document.getElementById('smb-mtime-fix-rawcmd-result');
-        var rawCmdCommand = document.getElementById('smb-mtime-fix-rawcmd-command');
         var rawCmdExit = document.getElementById('smb-mtime-fix-rawcmd-exit');
         var rawCmdOutput = document.getElementById('smb-mtime-fix-rawcmd-output');
 
@@ -583,7 +581,6 @@
                 // Shares the same mount dropdown as the allinfo checker above.
                 var mountId = debugMountSelect ? parseInt(debugMountSelect.value, 10) : 0;
                 var command = rawCmdInput ? rawCmdInput.value.trim() : '';
-                var directory = rawCmdDirInput ? rawCmdDirInput.value.trim() : '';
 
                 if (!mountId || !command) {
                     rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Pick a mount and enter a command first.');
@@ -596,12 +593,11 @@
 
                 jsonFetch(apiUrl('/debug-raw'), {
                     method: 'POST',
-                    body: JSON.stringify({ mountId: mountId, command: command, directory: directory }),
+                    body: JSON.stringify({ mountId: mountId, command: command }),
                 })
                     .then(function (data) {
                         rawCmdStatus.textContent = '';
                         rawCmdResult.style.display = '';
-                        rawCmdCommand.textContent = data.fullCommand || t('nextcloud_smb_mtime_fix', '(not available)');
                         rawCmdExit.textContent = data.message || (data.ok ? t('nextcloud_smb_mtime_fix', 'success') : t('nextcloud_smb_mtime_fix', 'failed'));
                         rawCmdOutput.textContent = data.output || t('nextcloud_smb_mtime_fix', '(no output)');
                     })

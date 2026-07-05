@@ -1,21 +1,5 @@
 # Changelog
 
-## 0.5.6
-- Both Advanced tools now show the exact, fully-assembled smbclient
-  command line (password redacted) they actually ran, built from the
-  same code path used for the real `exec()` call - not a reconstruction,
-  the literal string. Lets you visually confirm exactly what bytes smbclient
-  received instead of trusting a trace of PHP's escaping.
-
-## 0.5.5
-- Added an optional "Initial directory" (`-D`) field to the "Run a raw
-  smbclient command" tool under Advanced. `-D` is a genuine top-level
-  smbclient command-line flag, parsed separately from whatever's inside
-  `-c` - a 2004 Samba mailing list thread documents `-D "Some Folder"
-  -c ls` working where `-c "ls Some Folder"` fails on the exact same
-  space-in-path truncation this app has been hitting. Lets that be tested
-  directly from the admin page.
-
 ## 0.5.4
 - "Test allinfo parsing" under Advanced can now try single-quoting the
   path instead of the double-quoting the real scan/apply code uses today
