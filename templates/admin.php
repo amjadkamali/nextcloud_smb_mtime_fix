@@ -156,46 +156,16 @@
                 <label for="smb-mtime-fix-debug-path"><?php p($l->t('File path, relative to the mount (e.g. folder/file.txt):')); ?></label><br/>
                 <input type="text" id="smb-mtime-fix-debug-path" class="input" style="width: 100%; max-width: 500px;" placeholder="folder/file.txt" />
             </p>
-            <p>
-                <label for="smb-mtime-fix-debug-quote"><?php p($l->t('Path quoting to test:')); ?></label>
-                <select id="smb-mtime-fix-debug-quote" class="select">
-                    <option value="double"><?php p($l->t('Double quotes " (what the real scan/apply uses today)')); ?></option>
-                    <option value="single"><?php p($l->t('Single quotes \' (experimental - for testing paths with spaces)')); ?></option>
-                </select>
-            </p>
             <button id="smb-mtime-fix-debug-btn" class="button">
                 <?php p($l->t('Test allinfo parsing')); ?>
             </button>
             <span id="smb-mtime-fix-debug-status"></span>
 
             <div id="smb-mtime-fix-debug-result" style="display:none; margin-top: 1em;">
-                <p><strong><?php p($l->t('Command tried:')); ?></strong> <code id="smb-mtime-fix-debug-command"></code></p>
                 <p><strong><?php p($l->t('Parsed result:')); ?></strong> <span id="smb-mtime-fix-debug-parsed"></span></p>
                 <p><strong><?php p($l->t('Line matched:')); ?></strong> <code id="smb-mtime-fix-debug-line"></code></p>
                 <p><strong><?php p($l->t('Raw allinfo output:')); ?></strong></p>
                 <pre id="smb-mtime-fix-debug-raw" style="background: var(--color-background-dark, #f0f0f0); padding: 0.75em; overflow-x: auto; white-space: pre-wrap; border-radius: 4px;"></pre>
-            </div>
-
-            <hr/>
-
-            <h4><?php p($l->t('Run a raw smbclient command')); ?></h4>
-            <p class="settings-hint">
-                <strong><?php p($l->t('Not read-only.')); ?></strong>
-                <?php p($l->t('Runs exactly what you type as smbclient\'s -c command, using the selected mount\'s stored credentials - useful for trying different quoting/escaping without waiting on another app release, but it will actually execute whatever you enter, including destructive sub-commands (del, rmdir, etc). Unlike the tool above, this does NOT automatically add the mount\'s configured root folder to your path - include it yourself if needed.')); ?>
-            </p>
-            <p>
-                <label for="smb-mtime-fix-rawcmd-input"><?php p($l->t('Command (e.g. allinfo "some/path", or ls, or dir "some/folder"):')); ?></label><br/>
-                <input type="text" id="smb-mtime-fix-rawcmd-input" class="input" style="width: 100%; max-width: 600px;" placeholder='allinfo "some/path/to/file.ext"' />
-            </p>
-            <button id="smb-mtime-fix-rawcmd-btn" class="button">
-                <?php p($l->t('Run command')); ?>
-            </button>
-            <span id="smb-mtime-fix-rawcmd-status"></span>
-
-            <div id="smb-mtime-fix-rawcmd-result" style="display:none; margin-top: 1em;">
-                <p><strong><?php p($l->t('Exit status:')); ?></strong> <span id="smb-mtime-fix-rawcmd-exit"></span></p>
-                <p><strong><?php p($l->t('Output:')); ?></strong></p>
-                <pre id="smb-mtime-fix-rawcmd-output" style="background: var(--color-background-dark, #f0f0f0); padding: 0.75em; overflow-x: auto; white-space: pre-wrap; border-radius: 4px;"></pre>
             </div>
             <?php endif; ?>
         </div>

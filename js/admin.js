@@ -511,11 +511,9 @@
 
         var debugMountSelect = document.getElementById('smb-mtime-fix-debug-mount');
         var debugPathInput = document.getElementById('smb-mtime-fix-debug-path');
-        var debugQuoteSelect = document.getElementById('smb-mtime-fix-debug-quote');
         var debugBtn = document.getElementById('smb-mtime-fix-debug-btn');
         var debugStatus = document.getElementById('smb-mtime-fix-debug-status');
         var debugResult = document.getElementById('smb-mtime-fix-debug-result');
-        var debugCommand = document.getElementById('smb-mtime-fix-debug-command');
         var debugParsed = document.getElementById('smb-mtime-fix-debug-parsed');
         var debugLine = document.getElementById('smb-mtime-fix-debug-line');
         var debugRaw = document.getElementById('smb-mtime-fix-debug-raw');
@@ -524,7 +522,6 @@
             debugBtn.addEventListener('click', function () {
                 var mountId = debugMountSelect ? parseInt(debugMountSelect.value, 10) : 0;
                 var path = debugPathInput ? debugPathInput.value.trim() : '';
-                var quote = debugQuoteSelect ? debugQuoteSelect.value : 'double';
 
                 if (!mountId || !path) {
                     debugStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Pick a mount and enter a file path first.');
@@ -537,12 +534,11 @@
 
                 jsonFetch(apiUrl('/debug-allinfo'), {
                     method: 'POST',
-                    body: JSON.stringify({ mountId: mountId, path: path, quote: quote }),
+                    body: JSON.stringify({ mountId: mountId, path: path }),
                 })
                     .then(function (data) {
                         debugStatus.textContent = '';
                         debugResult.style.display = '';
-                        debugCommand.textContent = data.commandArg || t('nextcloud_smb_mtime_fix', '(not available)');
                         debugRaw.textContent = data.rawOutput || t('nextcloud_smb_mtime_fix', '(no output)');
                         debugLine.textContent = data.matchedLine || t('nextcloud_smb_mtime_fix', '(none)');
 
@@ -563,49 +559,6 @@
                     })
                     .finally(function () {
                         debugBtn.disabled = false;
-                    });
-            });
-        }
-
-        // --- advanced: run a raw smbclient command ------------------------------
-
-        var rawCmdInput = document.getElementById('smb-mtime-fix-rawcmd-input');
-        var rawCmdBtn = document.getElementById('smb-mtime-fix-rawcmd-btn');
-        var rawCmdStatus = document.getElementById('smb-mtime-fix-rawcmd-status');
-        var rawCmdResult = document.getElementById('smb-mtime-fix-rawcmd-result');
-        var rawCmdExit = document.getElementById('smb-mtime-fix-rawcmd-exit');
-        var rawCmdOutput = document.getElementById('smb-mtime-fix-rawcmd-output');
-
-        if (rawCmdBtn) {
-            rawCmdBtn.addEventListener('click', function () {
-                // Shares the same mount dropdown as the allinfo checker above.
-                var mountId = debugMountSelect ? parseInt(debugMountSelect.value, 10) : 0;
-                var command = rawCmdInput ? rawCmdInput.value.trim() : '';
-
-                if (!mountId || !command) {
-                    rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Pick a mount and enter a command first.');
-                    return;
-                }
-
-                rawCmdBtn.disabled = true;
-                rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Running…');
-                rawCmdResult.style.display = 'none';
-
-                jsonFetch(apiUrl('/debug-raw'), {
-                    method: 'POST',
-                    body: JSON.stringify({ mountId: mountId, command: command }),
-                })
-                    .then(function (data) {
-                        rawCmdStatus.textContent = '';
-                        rawCmdResult.style.display = '';
-                        rawCmdExit.textContent = data.message || (data.ok ? t('nextcloud_smb_mtime_fix', 'success') : t('nextcloud_smb_mtime_fix', 'failed'));
-                        rawCmdOutput.textContent = data.output || t('nextcloud_smb_mtime_fix', '(no output)');
-                    })
-                    .catch(function () {
-                        rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Request failed - check the server log.');
-                    })
-                    .finally(function () {
-                        rawCmdBtn.disabled = false;
                     });
             });
         }

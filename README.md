@@ -80,14 +80,8 @@ are also always written to PHP's native error log as a backstop.
 
 - `allinfo` output parsing (used by the retroactive scan to read a file's
   real on-share mtime) has some version-to-version drift across Samba/
-  smbclient releases. The plain human-readable form with a trailing
-  timezone abbreviation (e.g. `write_time: Sat Jul  4 23:02:35 2026 UTC`)
-  is confirmed working against a live server; a variant some builds are
-  reported to use, with the raw epoch additionally appended in
-  parentheses, is still unconfirmed in the wild but handled as a
-  preferred path if present. Use the "Test allinfo parsing" tool under
-  **Advanced** on the admin page to check which one your server actually
-  produces, instead of guessing or reading raw smbclient output by hand.
+  smbclient releases. Spot-check with `smbclient //host/share -U
+  user%pass -c 'allinfo "path/to/file"'` if scan results look off.
 - The retroactive scan shells out to `smbclient` once per file checked. It
   runs in small, bounded batches (following a resumable cursor) so a single
   request can't run long enough to hit PHP's `max_execution_time` or a
@@ -100,9 +94,9 @@ are also always written to PHP's native error log as a backstop.
 - "Scan & fix all automatically" writes to every mismatched file it finds
   with no per-file review - it's built on the same batching as the manual
   flow, so it won't time out, but (when dry-run is off) it will happily
-  write thousands of corrections in a row based on the `allinfo` parsing
-  mentioned above. Confirm it with the Advanced diagnostic tool, and a
-  normal scan + manual apply, before trusting it with a whole share.
+  write thousands of corrections in a row based on the same
+  not-fully-verified `allinfo` parsing mentioned above. Confirm a normal
+  scan + manual apply looks right on your setup before trusting it with a
   whole share. It also only guards against double-starting from the same
   browser tab - running it from two tabs or two admin sessions at once
   isn't prevented.
