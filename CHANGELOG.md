@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.6
+- Fixed: the new "skipped" log category was missing from the admin
+  page's label list, showing the raw lowercase key instead of a proper
+  name - now shows "Skipped files".
+- Corrected overstated wording: Database compare mode does not "rely on"
+  Live recheck for safety - "Never move mtime forward" still checks
+  against the cached `storage_mtime` value even with live recheck off,
+  just less precisely than with a fresh reading. Live recheck sharpens
+  that check and adds an "already fixed by something else" check with no
+  DB-mode equivalent, but it's an improvement on top, not a hard
+  dependency Database compare mode can't function without.
+
 ## 0.5.5
 - New "Options" section under the retroactive scan, with three settings:
   - **Detection mode** (default: Live SMB read) - the existing per-file

@@ -132,8 +132,12 @@ class MtimeFixService {
      * (`mtime` vs `storage_mtime`) with a single query, no smbclient
      * calls during scanning at all - much faster, but `storage_mtime` is
      * only as fresh as whenever Nextcloud last looked, not a live
-     * reading. See isLiveRecheckEnabled() - this mode's safety relies on
-     * that setting staying on.
+     * reading. isNeverMoveForwardEnabled() still checks against that
+     * cached value even without a live recheck; isLiveRecheckEnabled()
+     * sharpens that to a fresh reading and additionally catches files
+     * already fixed by something else since the scan ran - a real
+     * improvement, not a hard dependency this mode can't function
+     * without.
      */
     public function getDetectionMode(): string {
         $mode = $this->config->getAppValue(self::APP_ID, 'detection_mode', self::DETECTION_MODE_SMB);

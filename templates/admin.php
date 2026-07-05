@@ -52,6 +52,7 @@
     $logLevelLabels = [
         'status' => $l->t('Dry-run output & success messages'),
         'errors' => $l->t('Errors'),
+        'skipped' => $l->t('Skipped files'),
     ];
     $levelNames = [
         0 => $l->t('Debug'),
@@ -116,7 +117,7 @@
                value="db" <?php p($_['detectionMode'] === 'db' ? 'checked' : ''); ?> />
         <label for="smb-mtime-fix-detection-db">
             <?php p($l->t('Database compare')); ?> &mdash;
-            <?php p($l->t('compares two already-cached database columns with a single query - no smbclient calls at all during scanning, much faster. The "actual mtime" this finds is Nextcloud\'s own last-known value, not a live reading - relies on "Live recheck before writing" below for anything before it\'s actually applied.')); ?>
+            <?php p($l->t('compares two already-cached database columns with a single query - no smbclient calls at all during scanning, much faster. The "actual mtime" this finds is Nextcloud\'s own last-known value, not a live reading. "Never move mtime forward" below still checks against that cached value even without a live recheck - "Live recheck before writing" just sharpens it to a fresh reading, and additionally catches files already fixed by something else since the scan ran.')); ?>
         </label>
     </p>
     <p>
