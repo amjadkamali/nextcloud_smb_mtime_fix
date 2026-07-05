@@ -32,6 +32,9 @@ class AdminSettings implements ISettings {
             'logLevels' => $logLevels,
             'logLevelDefaults' => $logLevelDefaults,
             'smbMounts' => $this->service->listSmbMounts(),
+            'detectionMode' => $this->service->getDetectionMode(),
+            'liveRecheckEnabled' => $this->service->isLiveRecheckEnabled(),
+            'neverForwardEnabled' => $this->service->isNeverMoveForwardEnabled(),
         ], '');
     }
 

@@ -24,7 +24,11 @@ no built-in way to fix this after the fact.
   and apply fixes on demand. There's also a "scan and fix all
   automatically" button next to it that skips the review step - see the
   caveat below before using it on a large share. Both apply paths respect
-  the dry-run setting above, the same as the real-time listener.
+  the dry-run setting above, the same as the real-time listener. An
+  "Options" section lets you trade detection speed for accuracy (compare
+  live SMB reads vs. two already-cached database columns), and includes
+  two safety nets - a pre-write live recheck, and refusing to move a
+  timestamp forward - both on by default.
 - **Dry run mode** (on by default): log what the app *would* do without
   touching anything, until you've verified it against your own SMB server.
 - **Configurable logging**: separate log levels for routine status messages

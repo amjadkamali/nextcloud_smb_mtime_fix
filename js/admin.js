@@ -16,9 +16,13 @@
         var scanStatus = document.getElementById('smb-mtime-fix-scan-status');
         var resultsWrap = document.getElementById('smb-mtime-fix-results');
         var resultsBody = document.getElementById('smb-mtime-fix-results-body');
+        var actualMtimeHeader = document.getElementById('smb-mtime-fix-actual-mtime-header');
         var selectAll = document.getElementById('smb-mtime-fix-select-all');
         var applyBtn = document.getElementById('smb-mtime-fix-apply');
         var applyStatus = document.getElementById('smb-mtime-fix-apply-status');
+        var detectionModeRadios = document.querySelectorAll('input[name="smb-mtime-fix-detection-mode"]');
+        var liveRecheckCheckbox = document.getElementById('smb-mtime-fix-live-recheck');
+        var neverForwardCheckbox = document.getElementById('smb-mtime-fix-never-forward');
 
         var lastMismatches = [];
 
@@ -100,6 +104,53 @@
             });
         });
 
+        // --- retroactive scan options (detection mode / live recheck / never-forward) ---
+
+        // Same save-on-change pattern as log levels above, but on one
+        // shared endpoint since these three don't need separate ones the
+        // way log categories do.
+        function saveOption(key, value, revert) {
+            jsonFetch(apiUrl('/options'), {
+                method: 'POST',
+                body: JSON.stringify({ key: key, value: value }),
+            }).catch(function () {
+                // revert the UI so it doesn't lie about server state
+                revert();
+            });
+        }
+
+        detectionModeRadios.forEach(function (radio) {
+            radio.addEventListener('change', function () {
+                if (!radio.checked) {
+                    return;
+                }
+                var previousValue = radio.value === 'smb' ? 'db' : 'smb';
+                saveOption('detectionMode', radio.value, function () {
+                    detectionModeRadios.forEach(function (r) {
+                        r.checked = (r.value === previousValue);
+                    });
+                });
+            });
+        });
+
+        if (liveRecheckCheckbox) {
+            liveRecheckCheckbox.addEventListener('change', function () {
+                var newValue = liveRecheckCheckbox.checked;
+                saveOption('liveRecheck', newValue, function () {
+                    liveRecheckCheckbox.checked = !newValue;
+                });
+            });
+        }
+
+        if (neverForwardCheckbox) {
+            neverForwardCheckbox.addEventListener('change', function () {
+                var newValue = neverForwardCheckbox.checked;
+                saveOption('neverForward', newValue, function () {
+                    neverForwardCheckbox.checked = !newValue;
+                });
+            });
+        }
+
         // --- scan -------------------------------------------------------------
 
         // Each request only examines a bounded batch of files (server-side
@@ -172,6 +223,11 @@
                 })
                     .then(function (data) {
                         examinedTotal += data.examined || 0;
+                        if (actualMtimeHeader) {
+                            actualMtimeHeader.textContent = data.detectionMode === 'db'
+                                ? t('nextcloud_smb_mtime_fix', 'Last known storage mtime (not live)')
+                                : t('nextcloud_smb_mtime_fix', 'Actual mtime on share');
+                        }
                         (data.mismatches || []).forEach(function (m) {
                             lastMismatches.push(m);
                             appendResultRow(m, lastMismatches.length - 1);
@@ -206,15 +262,31 @@
                 '<td><input type="checkbox" class="smb-mtime-fix-row" checked data-index="' + index + '" /></td>' +
                 '<td>' + escapeHtml(m.path) + '</td>' +
                 '<td>' + formatDate(m.cachedMtime) + '</td>' +
-                '<td>' + formatDate(m.actualMtime) + '</td>';
+                '<td>' + formatDate(m.actualMtime) + '</td>' +
+                '<td class="smb-mtime-fix-row-status"></td>';
             resultsBody.appendChild(tr);
             resultsWrap.style.display = '';
         }
 
+        // Sets the Status column text for one row - used for skip reasons
+        // and failure messages, neither of which remove the row (only a
+        // real, successful write does that, via removeResultRow below).
+        function setRowStatus(path, text) {
+            var row = resultsBody.querySelector('tr[data-path="' + CSS.escape(path) + '"]');
+            if (!row) {
+                return;
+            }
+            var cell = row.querySelector('.smb-mtime-fix-row-status');
+            if (cell) {
+                cell.textContent = text || '';
+            }
+        }
+
         // Removes a single fixed file's row from the table (and marks it null
         // in lastMismatches so it's skipped if the admin clicks Apply again
-        // without re-scanning). Leaves failed rows in place so they stay
-        // visible and selectable for a retry.
+        // without re-scanning). Leaves failed/skipped rows in place so
+        // they stay visible and selectable for a retry, with a reason in
+        // the Status column via setRowStatus().
         function removeResultRow(path) {
             var idx = lastMismatches.findIndex(function (m) {
                 return m && m.path === path;
@@ -258,12 +330,13 @@
 
             var okCount = 0;
             var dryRunCount = 0;
+            var skippedCount = 0;
             var failCount = 0;
             var hadRequestFailure = false;
 
             function runChunk(chunkIndex) {
                 if (chunkIndex >= chunks.length) {
-                    onComplete({ ok: okCount, dryRun: dryRunCount, failed: failCount, hadRequestFailure: hadRequestFailure });
+                    onComplete({ ok: okCount, dryRun: dryRunCount, skipped: skippedCount, failed: failCount, hadRequestFailure: hadRequestFailure });
                     return;
                 }
 
@@ -274,16 +347,25 @@
                 })
                     .then(function (data) {
                         (data.results || []).forEach(function (r) {
-                            if (r.ok && r.dryRun) {
+                            if (r.skipped) {
+                                // A deliberate protective decision (live
+                                // recheck or never-move-forward caught
+                                // something), not an error - leave the row
+                                // in place with the reason shown.
+                                skippedCount++;
+                                setRowStatus(r.path, t('nextcloud_smb_mtime_fix', 'Skipped: {reason}', { reason: r.message }));
+                            } else if (r.ok && r.dryRun) {
                                 // Dry-run means nothing was actually written -
                                 // leave the row in place so it's still there
                                 // to apply for real later.
                                 dryRunCount++;
+                                setRowStatus(r.path, t('nextcloud_smb_mtime_fix', 'Dry-run: {message}', { message: r.message }));
                             } else if (r.ok) {
                                 okCount++;
                                 removeResultRow(r.path);
                             } else {
                                 failCount++;
+                                setRowStatus(r.path, t('nextcloud_smb_mtime_fix', 'Failed: {message}', { message: r.message }));
                             }
                         });
                     })
@@ -292,7 +374,7 @@
                         failCount += chunk.length;
                     })
                     .finally(function () {
-                        onProgress(okCount, dryRunCount, failCount);
+                        onProgress(okCount, dryRunCount, skippedCount, failCount);
                         runChunk(chunkIndex + 1);
                     });
             }
@@ -328,9 +410,9 @@
 
             applyItemsInChunks(
                 selected,
-                function (ok, dryRun, failed) {
+                function (ok, dryRun, skipped, failed) {
                     applyStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Applying… {done}/{total}', {
-                        done: ok + dryRun + failed,
+                        done: ok + dryRun + skipped + failed,
                         total: total,
                     });
                 },
@@ -338,6 +420,9 @@
                     var note = '';
                     if (result.dryRun > 0) {
                         note += ' ' + t('nextcloud_smb_mtime_fix', '{count} logged as dry-run (nothing written).', { count: result.dryRun });
+                    }
+                    if (result.skipped > 0) {
+                        note += ' ' + t('nextcloud_smb_mtime_fix', '{count} skipped (see Status column).', { count: result.skipped });
                     }
                     if (result.hadRequestFailure) {
                         note += ' ' + t('nextcloud_smb_mtime_fix', '(one or more batches failed - check the server log; unfixed files are still listed below)');
@@ -413,6 +498,7 @@
             var examined = 0;
             var fixed = 0;
             var wouldFix = 0;
+            var skipped = 0;
             var failed = 0;
 
             function finish(note) {
@@ -421,6 +507,9 @@
                     parts.push(t('nextcloud_smb_mtime_fix', '{count} would be fixed (dry-run - nothing written)', { count: wouldFix }));
                 }
                 parts.push(t('nextcloud_smb_mtime_fix', '{count} fixed', { count: fixed }));
+                if (skipped > 0) {
+                    parts.push(t('nextcloud_smb_mtime_fix', '{count} skipped (see the log for reasons)', { count: skipped }));
+                }
                 if (failed > 0) {
                     parts.push(t('nextcloud_smb_mtime_fix', '{count} failed', { count: failed }));
                 }
@@ -432,10 +521,11 @@
             }
 
             function progressText() {
-                return t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed{wouldFixPart} so far.', {
+                return t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed{wouldFixPart}{skippedPart} so far.', {
                     examined: examined,
                     fixed: fixed,
                     wouldFixPart: wouldFix > 0 ? t('nextcloud_smb_mtime_fix', ' ({wouldFix} dry-run)', { wouldFix: wouldFix }) : '',
+                    skippedPart: skipped > 0 ? t('nextcloud_smb_mtime_fix', ' ({skipped} skipped)', { skipped: skipped }) : '',
                 });
             }
 
@@ -468,16 +558,18 @@
 
                         applyItemsInChunks(
                             found,
-                            function (ok, dryRun) {
-                                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed{wouldFixPart} so far.', {
+                            function (ok, dryRun, skippedSoFar) {
+                                autoStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Working… {examined} checked, {fixed} fixed{wouldFixPart}{skippedPart} so far.', {
                                     examined: examined,
                                     fixed: fixed + ok,
                                     wouldFixPart: (wouldFix + dryRun) > 0 ? t('nextcloud_smb_mtime_fix', ' ({wouldFix} dry-run)', { wouldFix: wouldFix + dryRun }) : '',
+                                    skippedPart: (skipped + skippedSoFar) > 0 ? t('nextcloud_smb_mtime_fix', ' ({skipped} skipped)', { skipped: skipped + skippedSoFar }) : '',
                                 });
                             },
                             function (result) {
                                 fixed += result.ok;
                                 wouldFix += result.dryRun;
+                                skipped += result.skipped;
                                 failed += result.failed;
 
                                 // In dry-run, "fixed" never grows (nothing is

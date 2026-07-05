@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.5
+- New "Options" section under the retroactive scan, with three settings:
+  - **Detection mode** (default: Live SMB read) - the existing per-file
+    `smbclient` comparison, or a new **Database compare** mode that
+    checks `mtime` vs `storage_mtime` with a single query per batch, no
+    `smbclient` calls during scanning at all. Much faster, but
+    `storage_mtime` is Nextcloud's own last-known value, not a live
+    reading - the results table's "actual mtime" column is relabeled
+    accordingly in this mode.
+  - **Live recheck before writing** (default on) - re-reads the file's
+    live mtime immediately before writing and confirms it still actually
+    disagrees with the intended value. Skips (doesn't fail) a file if
+    something else already fixed it since the scan ran, or if the
+    current value can't be confirmed. This is what keeps Database
+    compare mode safe to use for real writes.
+  - **Never move mtime forward** (default on) - refuses to write a
+    timestamp later than the most recently known value for that file.
+    Catches the case where a file was genuinely edited on the share by
+    something unrelated after the scan ran - without this, that edit
+    would be silently overwritten by the (older, wrong) cached value.
+  - All three are implemented entirely in the retroactive apply path
+    (`applyMismatch()`), not the shared low-level fix routine - the
+    real-time listener is completely unaffected by any of them.
+- New "skipped" log category (default level: Warning) for the two skip
+  reasons above.
+- Results table gained a Status column - skipped and failed rows now
+  show why, instead of failed rows silently having no visible reason
+  (a pre-existing gap) and skipped rows having nowhere to appear at all.
+  Both "Update selected files" and "Scan & fix all automatically" report
+  skip counts alongside fixed/failed counts.
+
 ## 0.5.4
 - Retroactive apply's success and dry-run log messages now report the
   mtime being corrected *from*, not just what it's being set *to* (e.g.

@@ -116,6 +116,72 @@ class MtimeFixService {
         $this->clearTempOff();
     }
 
+    // ---------------------------------------------------------------
+    // Retroactive scan/apply options
+    // ---------------------------------------------------------------
+
+    public const DETECTION_MODE_SMB = 'smb';
+    public const DETECTION_MODE_DB = 'db';
+    public const DETECTION_MODES = [self::DETECTION_MODE_SMB, self::DETECTION_MODE_DB];
+
+    /**
+     * 'smb' (default): scan reads each file's real mtime live off the
+     * share via smbclient, compared against the displayed `mtime` -
+     * slow (one smbclient call per file) but always current at scan time.
+     * 'db': scan compares two already-cached DB columns
+     * (`mtime` vs `storage_mtime`) with a single query, no smbclient
+     * calls during scanning at all - much faster, but `storage_mtime` is
+     * only as fresh as whenever Nextcloud last looked, not a live
+     * reading. See isLiveRecheckEnabled() - this mode's safety relies on
+     * that setting staying on.
+     */
+    public function getDetectionMode(): string {
+        $mode = $this->config->getAppValue(self::APP_ID, 'detection_mode', self::DETECTION_MODE_SMB);
+        return in_array($mode, self::DETECTION_MODES, true) ? $mode : self::DETECTION_MODE_SMB;
+    }
+
+    public function setDetectionMode(string $mode): void {
+        if (!in_array($mode, self::DETECTION_MODES, true)) {
+            $mode = self::DETECTION_MODE_SMB;
+        }
+        $this->config->setAppValue(self::APP_ID, 'detection_mode', $mode);
+    }
+
+    /**
+     * Default on. Right before writing, re-reads the file's live mtime
+     * off the share and confirms it still actually disagrees with the
+     * intended value - catches "already fixed by something else since
+     * the scan ran" and is also what makes "never move mtime forward"
+     * meaningful when detection mode is 'db' (which otherwise never
+     * takes a live reading at all).
+     */
+    public function isLiveRecheckEnabled(): bool {
+        return $this->config->getAppValue(self::APP_ID, 'live_recheck_enabled', '1') === '1';
+    }
+
+    public function setLiveRecheckEnabled(bool $enabled): void {
+        $this->config->setAppValue(self::APP_ID, 'live_recheck_enabled', $enabled ? '1' : '0');
+    }
+
+    /**
+     * Default on. Refuses to write a timestamp that's later than the
+     * most recent value known for that file (from the live recheck above
+     * if it ran, otherwise whatever value the original scan captured -
+     * which may be a live smbclient reading or, in 'db' detection mode,
+     * `storage_mtime`). A legitimate fix should only ever move a
+     * timestamp backward (SMB stamps files with upload time, which is
+     * later than the true original) - a forward move means something
+     * unrelated changed the file for real since, and writing over it
+     * would silently destroy that change.
+     */
+    public function isNeverMoveForwardEnabled(): bool {
+        return $this->config->getAppValue(self::APP_ID, 'never_move_forward_enabled', '1') === '1';
+    }
+
+    public function setNeverMoveForwardEnabled(bool $enabled): void {
+        $this->config->setAppValue(self::APP_ID, 'never_move_forward_enabled', $enabled ? '1' : '0');
+    }
+
     /**
      * Convenience used by the real-time listener.
      */
@@ -185,12 +251,14 @@ class MtimeFixService {
     public const MESSAGE_TYPE_PARSE_FAILED = 'parse_failed';
     public const MESSAGE_TYPE_TEMP_OFF_UNSUPPORTED = 'temp_off_unsupported';
     public const MESSAGE_TYPE_UNEXPECTED = 'unexpected';
+    public const MESSAGE_TYPE_SKIPPED = 'skipped';
 
     public const CATEGORY_STATUS = 'status';
     public const CATEGORY_ERRORS = 'errors';
+    public const CATEGORY_SKIPPED = 'skipped';
 
     /** Single source of truth for the admin page to render one row per category. */
-    public const CATEGORIES = [self::CATEGORY_STATUS, self::CATEGORY_ERRORS];
+    public const CATEGORIES = [self::CATEGORY_STATUS, self::CATEGORY_ERRORS, self::CATEGORY_SKIPPED];
 
     private const MESSAGE_TYPE_CATEGORY = [
         self::MESSAGE_TYPE_DRY_RUN => self::CATEGORY_STATUS,
@@ -201,12 +269,14 @@ class MtimeFixService {
         self::MESSAGE_TYPE_PARSE_FAILED => self::CATEGORY_ERRORS,
         self::MESSAGE_TYPE_TEMP_OFF_UNSUPPORTED => self::CATEGORY_ERRORS,
         self::MESSAGE_TYPE_UNEXPECTED => self::CATEGORY_ERRORS,
+        self::MESSAGE_TYPE_SKIPPED => self::CATEGORY_SKIPPED,
     ];
 
     /** Default level per category if the admin hasn't overridden it yet. */
     private const CATEGORY_DEFAULT_LEVEL = [
         self::CATEGORY_STATUS => self::SEVERITY_INFO,
         self::CATEGORY_ERRORS => self::SEVERITY_ERROR,
+        self::CATEGORY_SKIPPED => self::SEVERITY_WARNING,
     ];
 
     public function getCategoryDefaultLevel(string $category): int {
@@ -464,10 +534,13 @@ class MtimeFixService {
      * shift slightly, but won't error out; worst case is missing or
      * re-checking a few files at the boundary, which a re-scan cleans up.
      *
-     * PERFORMANCE NOTE: this still shells out to smbclient once per file
-     * examined - $batchSize bounds how much of that happens per request,
-     * not the total work across a full scan (the caller loops, following
-     * the returned cursor, until it comes back null).
+     * PERFORMANCE NOTE: in 'smb' detection mode (the default), this shells
+     * out to smbclient once per file examined - $batchSize bounds how much
+     * of that happens per request, not the total work across a full scan
+     * (the caller loops, following the returned cursor, until it comes
+     * back null). 'db' mode skips smbclient entirely during scanning,
+     * comparing already-cached `mtime`/`storage_mtime` columns instead -
+     * much faster, but see getDetectionMode()'s docblock for the tradeoff.
      *
      * @param array{mountIndex?:int, afterFileId?:int} $cursor
      * @param int|null $mountId Restrict the scan to one specific mount
@@ -476,12 +549,14 @@ class MtimeFixService {
      * @return array{
      *     mismatches: list<array{storageId:string, mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime:int}>,
      *     cursor: array{mountIndex:int, afterFileId:int}|null,
-     *     examined: int
+     *     examined: int,
+     *     detectionMode: string
      * }
      */
     public function scanForMismatchesBatch(array $cursor, int $limit, int $batchSize, ?int $mountId = null): array {
         $mismatches = [];
         $examined = 0;
+        $detectionMode = $this->getDetectionMode();
 
         try {
             $mounts = $this->getOrderedSmbMounts();
@@ -493,7 +568,7 @@ class MtimeFixService {
             }
         } catch (\Throwable $e) {
             $this->logUnexpectedError('scanForMismatchesBatch/getAllStorages', $e);
-            return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => 0];
+            return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => 0, 'detectionMode' => $detectionMode];
         }
 
         $mountIndex = max(0, (int)($cursor['mountIndex'] ?? 0));
@@ -530,9 +605,18 @@ class MtimeFixService {
                         continue;
                     }
 
-                    $actualMtime = $this->queryActualMtime($host, $share, $user, $password, $domain, $root, $row['path']);
-                    if ($actualMtime === null) {
-                        continue;
+                    if ($detectionMode === self::DETECTION_MODE_DB) {
+                        // No smbclient call at all - just compare two
+                        // already-cached columns. storage_mtime is
+                        // Nextcloud's own last-known value for the
+                        // backend, not a live reading (see
+                        // getDetectionMode()'s docblock).
+                        $actualMtime = (int)$row['storage_mtime'];
+                    } else {
+                        $actualMtime = $this->queryActualMtime($host, $share, $user, $password, $domain, $root, $row['path']);
+                        if ($actualMtime === null) {
+                            continue;
+                        }
                     }
 
                     if (abs($actualMtime - (int)$row['mtime']) > self::MISMATCH_THRESHOLD_SECONDS) {
@@ -549,7 +633,7 @@ class MtimeFixService {
                             // Hit the admin's requested cap on total
                             // mismatches - stop the whole scan here, not
                             // just this mount.
-                            return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => $examined];
+                            return ['mismatches' => $mismatches, 'cursor' => null, 'examined' => $examined, 'detectionMode' => $detectionMode];
                         }
                     }
                 }
@@ -571,7 +655,7 @@ class MtimeFixService {
         $done = $mountIndex >= count($mounts);
         $nextCursor = $done ? null : ['mountIndex' => $mountIndex, 'afterFileId' => $afterFileId];
 
-        return ['mismatches' => $mismatches, 'cursor' => $nextCursor, 'examined' => $examined];
+        return ['mismatches' => $mismatches, 'cursor' => $nextCursor, 'examined' => $examined, 'detectionMode' => $detectionMode];
     }
 
     /**
@@ -635,14 +719,23 @@ class MtimeFixService {
      * that governs every write path in the app instead of the retroactive
      * flows being a special always-real-writes case.
      *
+     * The three retroactive-scan options (live recheck, never move
+     * forward, and by extension detection mode) are implemented entirely
+     * here, not in applyFix()/applyFixInner() - deliberately, so the
+     * real-time listener (which also calls into applyFix()) is never
+     * affected: it shouldn't gain an extra smbclient round-trip on a
+     * latency-sensitive write path, and "never move forward" doesn't
+     * apply the same way to a fix running immediately after the write
+     * whose value it's correcting.
+     *
      * @param array{mountId:int, fileId:int, path:string, cachedMtime:int, actualMtime?:int} $mismatch
-     * @return array{ok:bool, dryRun:bool, message:string}
+     * @return array{ok:bool, skipped:bool, dryRun:bool, message:string}
      */
     public function applyMismatch(array $mismatch): array {
         try {
             $mountConfig = $this->globalStoragesService->getStorage((int)$mismatch['mountId']);
             if ($mountConfig === null) {
-                return ['ok' => false, 'dryRun' => false, 'message' => 'mount config not found'];
+                return ['ok' => false, 'skipped' => false, 'dryRun' => false, 'message' => 'mount config not found'];
             }
 
             $options = $mountConfig->getBackendOptions();
@@ -655,18 +748,83 @@ class MtimeFixService {
                 'root' => trim($options['root'] ?? '', '/'),
             ];
 
-            // actualMtime came from the scan that found this mismatch - the
-            // wrong value that was actually on the share at that moment.
-            // Not guaranteed to still be current (the share could have
-            // changed since), but it's what we're correcting away from, so
-            // worth reporting even if slightly stale.
+            $intendedMtime = (int)$mismatch['cachedMtime'];
+
+            // actualMtime came from the scan that found this mismatch - a
+            // live smbclient reading in 'smb' detection mode, or
+            // storage_mtime in 'db' mode. Not guaranteed to still be
+            // current (the share could have changed since), which is
+            // exactly what the two options below exist to check.
             $previousMtime = isset($mismatch['actualMtime']) ? (int)$mismatch['actualMtime'] : null;
 
-            return $this->applyFix($conn, $mismatch['path'], (int)$mismatch['cachedMtime'], (int)$mismatch['fileId'], $this->isDryRunEnabled(), $previousMtime);
+            $liveRecheckEnabled = $this->isLiveRecheckEnabled();
+            $neverForwardEnabled = $this->isNeverMoveForwardEnabled();
+
+            // The freshest "current" value we can use for both checks
+            // below. A live recheck always re-reads; otherwise "never
+            // move forward" falls back to whatever the scan already
+            // found rather than paying for its own extra read - only
+            // reading live here if neither is available, so it always
+            // has something to compare against.
+            $currentValue = $previousMtime;
+
+            if ($liveRecheckEnabled || ($neverForwardEnabled && $currentValue === null)) {
+                $freshValue = $this->queryActualMtime(
+                    $conn['host'], $conn['share'], $conn['user'], $conn['password'], $conn['domain'], $conn['root'], $mismatch['path']
+                );
+
+                if ($freshValue !== null) {
+                    $currentValue = $freshValue;
+                } else {
+                    // Couldn't confirm the current value - whichever
+                    // option needed it, the safe move is to skip rather
+                    // than write without confirmation.
+                    return $this->skipMismatch($mismatch['path'], 'could not read the current mtime to confirm against - skipped rather than write unconfirmed');
+                }
+
+                if ($liveRecheckEnabled && abs($currentValue - $intendedMtime) <= self::MISMATCH_THRESHOLD_SECONDS) {
+                    // Already matches - something else fixed it since the scan ran.
+                    return $this->skipMismatch($mismatch['path'], 'already matches the intended mtime - skipped (fixed by something else since the scan ran)');
+                }
+            }
+
+            if ($neverForwardEnabled && $currentValue !== null && $intendedMtime > $currentValue) {
+                // The SMB bug this app fixes only ever needs a *backward*
+                // correction (upload time is always later than the true
+                // original) - a forward move means something unrelated
+                // changed the file for real since, and writing over it
+                // would silently destroy that change.
+                return $this->skipMismatch(
+                    $mismatch['path'],
+                    sprintf(
+                        'would move mtime forward (from %s to %s) - skipped to avoid overwriting a newer value',
+                        gmdate('Y-m-d H:i:s', $currentValue) . ' UTC',
+                        gmdate('Y-m-d H:i:s', $intendedMtime) . ' UTC'
+                    )
+                );
+            }
+
+            // Use the freshest known value for the FROM/TO log message,
+            // not necessarily the original (possibly stale) scan-time one.
+            $result = $this->applyFix($conn, $mismatch['path'], $intendedMtime, (int)$mismatch['fileId'], $this->isDryRunEnabled(), $currentValue);
+            $result['skipped'] = false;
+            return $result;
         } catch (\Throwable $e) {
             $this->logUnexpectedError('applyMismatch', $e);
-            return ['ok' => false, 'dryRun' => false, 'message' => 'unexpected error - see log'];
+            return ['ok' => false, 'skipped' => false, 'dryRun' => false, 'message' => 'unexpected error - see log'];
         }
+    }
+
+    /**
+     * @return array{ok:bool, skipped:bool, dryRun:bool, message:string}
+     */
+    private function skipMismatch(string $path, string $reason): array {
+        $this->logMessage(
+            self::MESSAGE_TYPE_SKIPPED,
+            'nextcloud_smb_mtime_fix: [skipped] {path}: {reason}',
+            ['path' => $path, 'reason' => $reason]
+        );
+        return ['ok' => false, 'skipped' => true, 'dryRun' => false, 'message' => $reason];
     }
 
     // ---------------------------------------------------------------
@@ -681,7 +839,7 @@ class MtimeFixService {
      *     corrects mtime immediately after a write without ever reading
      *     the share's prior value, so it always passes null here). When
      *     known, messages report "from X to Y"; otherwise just "to Y".
-     * @return array{ok:bool, dryRun:bool, message:string}
+     * @return array{ok:bool, skipped:bool, dryRun:bool, message:string}
      */
     private function applyFix(array $conn, string $internalPath, int $intendedMtime, int $fileId, bool $dryRun, ?int $previousMtime = null): array {
         try {
@@ -693,7 +851,7 @@ class MtimeFixService {
             // - we did NOT successfully verify a write happened, so we
             // report failure rather than risk a silent partial/bad write.
             $this->logUnexpectedError('applyFix', $e);
-            return ['ok' => false, 'dryRun' => $dryRun, 'message' => 'unexpected error - see log'];
+            return ['ok' => false, 'skipped' => false, 'dryRun' => $dryRun, 'message' => 'unexpected error - see log'];
         }
     }
 
@@ -716,13 +874,13 @@ class MtimeFixService {
                 'nextcloud_smb_mtime_fix: [dry-run] would set mtime for {path}{from} to {time}',
                 ['path' => $smbPath, 'from' => $fromSuffix, 'time' => $smbTime]
             );
-            return ['ok' => true, 'dryRun' => true, 'message' => "would set mtime{$fromSuffix} to {$smbTime}"];
+            return ['ok' => true, 'skipped' => false, 'dryRun' => true, 'message' => "would set mtime{$fromSuffix} to {$smbTime}"];
         }
 
         if (!function_exists('exec')) {
             $msg = 'exec() is disabled on this PHP install (see disable_functions in php.ini) - cannot run smbclient';
             $this->logMessage(self::MESSAGE_TYPE_SMBCLIENT_FAILED, 'nextcloud_smb_mtime_fix: {msg}', ['msg' => $msg]);
-            return ['ok' => false, 'dryRun' => false, 'message' => $msg];
+            return ['ok' => false, 'skipped' => false, 'dryRun' => false, 'message' => $msg];
         }
 
         $cmd = sprintf(
@@ -739,7 +897,7 @@ class MtimeFixService {
             $this->logMessage(self::MESSAGE_TYPE_SMBCLIENT_FAILED, 'nextcloud_smb_mtime_fix: {msg} for {path}', [
                 'msg' => $msg, 'path' => $smbPath,
             ]);
-            return ['ok' => false, 'dryRun' => false, 'message' => $msg];
+            return ['ok' => false, 'skipped' => false, 'dryRun' => false, 'message' => $msg];
         }
 
         // Patch storage_mtime directly by fileId, through a query builder
@@ -768,7 +926,7 @@ class MtimeFixService {
             ['path' => $smbPath, 'from' => $fromSuffix, 'time' => $smbTime]
         );
 
-        return ['ok' => true, 'dryRun' => false, 'message' => "mtime corrected{$fromSuffix} to {$smbTime}"];
+        return ['ok' => true, 'skipped' => false, 'dryRun' => false, 'message' => "mtime corrected{$fromSuffix} to {$smbTime}"];
     }
 
     // ---------------------------------------------------------------
@@ -802,14 +960,15 @@ class MtimeFixService {
      * fileid ascending, starting just after $afterFileId. Used by
      * scanForMismatchesBatch() to pull one bounded page of work per
      * request instead of iterating an entire (possibly huge) mount in one
-     * go.
+     * go. Includes storage_mtime alongside mtime so 'db' detection mode
+     * can compare the two without any further query.
      *
-     * @return list<array{fileid:int|string, path:string, mtime:int|string, mimetype:?string}>
+     * @return list<array{fileid:int|string, path:string, mtime:int|string, storage_mtime:int|string, mimetype:?string}>
      */
     private function fetchCacheEntriesPage(int $numericStorageId, int $afterFileId, int $maxRows): array {
         try {
             $qb = $this->db->getQueryBuilder();
-            $qb->select('fc.fileid', 'fc.path', 'fc.mtime', 'mt.mimetype')
+            $qb->select('fc.fileid', 'fc.path', 'fc.mtime', 'fc.storage_mtime', 'mt.mimetype')
                 ->from('filecache', 'fc')
                 ->leftJoin('fc', 'mimetypes', 'mt', $qb->expr()->eq('fc.mimetype', 'mt.id'))
                 ->where($qb->expr()->eq('fc.storage', $qb->createNamedParameter($numericStorageId, IQueryBuilder::PARAM_INT)))

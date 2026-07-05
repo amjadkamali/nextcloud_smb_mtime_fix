@@ -8,6 +8,8 @@ return [
         ['name' => 'admin#apply', 'url' => '/apply', 'verb' => 'POST'],
         ['name' => 'admin#getLogLevel', 'url' => '/log-level', 'verb' => 'GET'],
         ['name' => 'admin#setLogLevel', 'url' => '/log-level', 'verb' => 'POST'],
+        ['name' => 'admin#getOptions', 'url' => '/options', 'verb' => 'GET'],
+        ['name' => 'admin#setOptions', 'url' => '/options', 'verb' => 'POST'],
         ['name' => 'admin#debugAllinfo', 'url' => '/debug-allinfo', 'verb' => 'POST'],
     ],
 ];

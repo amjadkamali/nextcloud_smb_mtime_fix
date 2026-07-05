@@ -126,6 +126,58 @@ class AdminController extends Controller {
         });
     }
 
+    /**
+     * @return array{detectionMode:string, liveRecheckEnabled:bool, neverForwardEnabled:bool}
+     */
+    private function currentOptions(): array {
+        return [
+            'detectionMode' => $this->service->getDetectionMode(),
+            'liveRecheckEnabled' => $this->service->isLiveRecheckEnabled(),
+            'neverForwardEnabled' => $this->service->isNeverMoveForwardEnabled(),
+        ];
+    }
+
+    public function getOptions(): JSONResponse {
+        if ($denied = $this->requireAdmin()) {
+            return $denied;
+        }
+        return $this->runSafely(function () {
+            return new JSONResponse($this->currentOptions());
+        });
+    }
+
+    /**
+     * One combined endpoint for the three retroactive-scan options,
+     * updating whichever single one the admin just toggled - mirrors the
+     * per-category log-level pattern (save-on-change, not a batch form
+     * submit), just grouped into one endpoint since these three don't
+     * need separate ones the way log categories do.
+     */
+    public function setOptions(): JSONResponse {
+        if ($denied = $this->requireAdmin()) {
+            return $denied;
+        }
+        return $this->runSafely(function () {
+            $key = (string)$this->request->getParam('key', '');
+
+            switch ($key) {
+                case 'detectionMode':
+                    $this->service->setDetectionMode((string)$this->request->getParam('value', MtimeFixService::DETECTION_MODE_SMB));
+                    break;
+                case 'liveRecheck':
+                    $this->service->setLiveRecheckEnabled((bool)$this->request->getParam('value', true));
+                    break;
+                case 'neverForward':
+                    $this->service->setNeverMoveForwardEnabled((bool)$this->request->getParam('value', true));
+                    break;
+                default:
+                    return new JSONResponse(['message' => 'unknown option key'], Http::STATUS_BAD_REQUEST);
+            }
+
+            return new JSONResponse($this->currentOptions());
+        });
+    }
+
     public function apply(): JSONResponse {
         if ($denied = $this->requireAdmin()) {
             return $denied;

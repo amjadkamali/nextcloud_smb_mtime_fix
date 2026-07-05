@@ -98,9 +98,40 @@
             <?php endforeach; ?>
         </select>
     </p>
+
+    <h4><?php p($l->t('Options')); ?></h4>
     <p>
         <label for="smb-mtime-fix-scan-limit"><?php p($l->t('Limit (optional) - stop after finding/fixing this many:')); ?></label>
         <input type="number" id="smb-mtime-fix-scan-limit" class="input" min="1" placeholder="<?php p($l->t('unlimited')); ?>" style="width: 8em;" />
+    </p>
+    <p>
+        <strong><?php p($l->t('Detection mode:')); ?></strong><br/>
+        <input type="radio" name="smb-mtime-fix-detection-mode" id="smb-mtime-fix-detection-smb" class="radio"
+               value="smb" <?php p($_['detectionMode'] === 'smb' ? 'checked' : ''); ?> />
+        <label for="smb-mtime-fix-detection-smb">
+            <?php p($l->t('Live SMB read (default)')); ?> &mdash;
+            <?php p($l->t('reads each file\'s real mtime off the share via smbclient during the scan. Slower (one smbclient call per file), but always current at scan time.')); ?>
+        </label><br/>
+        <input type="radio" name="smb-mtime-fix-detection-mode" id="smb-mtime-fix-detection-db" class="radio"
+               value="db" <?php p($_['detectionMode'] === 'db' ? 'checked' : ''); ?> />
+        <label for="smb-mtime-fix-detection-db">
+            <?php p($l->t('Database compare')); ?> &mdash;
+            <?php p($l->t('compares two already-cached database columns with a single query - no smbclient calls at all during scanning, much faster. The "actual mtime" this finds is Nextcloud\'s own last-known value, not a live reading - relies on "Live recheck before writing" below for anything before it\'s actually applied.')); ?>
+        </label>
+    </p>
+    <p>
+        <input type="checkbox" id="smb-mtime-fix-live-recheck" class="checkbox" <?php p($_['liveRecheckEnabled'] ? 'checked' : ''); ?> />
+        <label for="smb-mtime-fix-live-recheck">
+            <strong><?php p($l->t('Live recheck before writing (default on)')); ?></strong> &mdash;
+            <?php p($l->t('right before writing, re-reads the file\'s live mtime and confirms it still actually disagrees with the intended value. Skips the file if something else already fixed it since the scan ran, or if the current value can\'t be confirmed.')); ?>
+        </label>
+    </p>
+    <p>
+        <input type="checkbox" id="smb-mtime-fix-never-forward" class="checkbox" <?php p($_['neverForwardEnabled'] ? 'checked' : ''); ?> />
+        <label for="smb-mtime-fix-never-forward">
+            <strong><?php p($l->t('Never move mtime forward (default on)')); ?></strong> &mdash;
+            <?php p($l->t('refuses to write a timestamp later than the most recently known value for that file. A legitimate fix should only ever move a timestamp backward - a forward move means something unrelated changed the file for real since, and writing over it would silently destroy that.')); ?>
+        </label>
     </p>
 
     <button id="smb-mtime-fix-scan" class="button">
@@ -119,7 +150,8 @@
                     <th style="width: 2em;"><input type="checkbox" id="smb-mtime-fix-select-all" checked /></th>
                     <th><?php p($l->t('Path')); ?></th>
                     <th><?php p($l->t('Currently recorded mtime')); ?></th>
-                    <th><?php p($l->t('Actual mtime on share')); ?></th>
+                    <th id="smb-mtime-fix-actual-mtime-header"><?php p($l->t('Actual mtime on share')); ?></th>
+                    <th><?php p($l->t('Status')); ?></th>
                 </tr>
             </thead>
             <tbody id="smb-mtime-fix-results-body"></tbody>
@@ -171,4 +203,3 @@
         </div>
     </details>
 </div>
-
