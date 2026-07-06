@@ -210,11 +210,24 @@
             <h4><?php p($l->t('Run a raw smbclient command')); ?></h4>
             <p class="settings-hint">
                 <strong><?php p($l->t('Not read-only.')); ?></strong>
-                <?php p($l->t('Runs exactly what you type as smbclient\'s -c command, using the selected mount\'s stored credentials. It will actually execute whatever you enter, including destructive sub-commands (del, rmdir, etc) - use a disposable test file/folder, never something real. Does NOT automatically add the mount\'s configured root folder to your path - include it yourself if needed.')); ?>
+                <?php p($l->t('Runs what you type using the selected mount\'s stored credentials. It will actually execute it, including destructive sub-commands (del, rmdir, etc) - use a disposable test file/folder, never something real. Does NOT automatically add the mount\'s configured root folder to your path - include it yourself if needed.')); ?>
             </p>
             <p>
-                <label for="smb-mtime-fix-rawcmd-input"><?php p($l->t('Command (e.g. allinfo "some/path"):')); ?></label><br/>
-                <input type="text" id="smb-mtime-fix-rawcmd-input" class="input" style="width: 100%; max-width: 600px;" placeholder='allinfo "some/path/to/file.ext"' />
+                <strong><?php p($l->t('How to send it:')); ?></strong><br/>
+                <input type="radio" name="smb-mtime-fix-rawcmd-mode" id="smb-mtime-fix-rawcmd-mode-c" class="radio" value="c" checked />
+                <label for="smb-mtime-fix-rawcmd-mode-c">
+                    <?php p($l->t('-c flag')); ?> &mdash;
+                    <?php p($l->t('what the real scan/apply code uses today: smbclient ... -c "your command". Only the first line of the box below is used.')); ?>
+                </label><br/>
+                <input type="radio" name="smb-mtime-fix-rawcmd-mode" id="smb-mtime-fix-rawcmd-mode-stdin" class="radio" value="stdin" />
+                <label for="smb-mtime-fix-rawcmd-mode-stdin">
+                    <?php p($l->t('Piped via stdin')); ?> &mdash;
+                    <?php p($l->t('echo \'your command(s)\' | smbclient ... - an alternate invocation, not currently used anywhere in this app. Each line in the box below is sent as a separate smbclient command.')); ?>
+                </label>
+            </p>
+            <p>
+                <label for="smb-mtime-fix-rawcmd-input"><?php p($l->t('Command(s) - one per line (e.g. allinfo "some/path"):')); ?></label><br/>
+                <textarea id="smb-mtime-fix-rawcmd-input" class="input" rows="4" style="width: 100%; max-width: 600px; font-family: monospace;" placeholder='allinfo "some/path/to/file.ext"'></textarea>
             </p>
             <button id="smb-mtime-fix-rawcmd-btn" class="button">
                 <?php p($l->t('Run command')); ?>

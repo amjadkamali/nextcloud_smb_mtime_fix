@@ -1276,26 +1276,43 @@ class MtimeFixService {
     }
 
     /**
-     * Runs a completely arbitrary `-c` command string against one mount,
-     * using this app's stored credentials for it. Exists so quoting/
-     * escaping/injection behavior can be tested directly from the admin
-     * page - without needing a new app release for every variant to try.
+     * Runs an arbitrary command against one mount, using this app's stored
+     * credentials for it. Exists so quoting/escaping/injection behavior -
+     * and alternate invocation methods - can be tested directly from the
+     * admin page, without needing a new app release for every variant to
+     * try.
+     *
+     * $mode selects how the command reaches smbclient:
+     *   'c'     (default) - via the -c flag, exactly what the real scan/
+     *           apply code uses today. Confirmed via real-world evidence
+     *           that a `;` anywhere in this - even inside quotes - gets
+     *           treated by smbclient's own parser as a command separator,
+     *           so whatever follows it runs as a second, independent
+     *           command, with no escape sequence able to prevent it.
+     *   'stdin' - piped in instead: `echo '...' | smbclient ...`, no -c
+     *           at all. A different code path (smbclient's interactive
+     *           command reader) that a Samba forum thread reports does
+     *           NOT share the -c parser's `;`-splitting bug, and separates
+     *           multiple commands on newlines rather than semicolons.
+     *           Not used anywhere in this app's real scan/apply code yet -
+     *           this is purely for confirming that behavior before
+     *           deciding whether to build around it.
+     * $rawCommand may contain multiple lines - in 'stdin' mode each line
+     * is a separate smbclient command; in 'c' mode only a single command
+     * makes sense (matching real -c usage), so only the first line is
+     * used.
      *
      * UNLIKE debugAllinfo(): this does NOT prepend the mount's configured
-     * root folder to anything - the command is passed through exactly as
-     * typed, so include the root yourself if your path needs it. It also
-     * is NOT read-only - smbclient sub-commands like `del` or `rmdir`
-     * would actually run, and (per confirmed real-world evidence) a `;`
-     * anywhere in what you type - even inside quotes - gets treated by
-     * smbclient's own parser as a command separator, so whatever follows
-     * it runs as a second, independent command. This is a deliberate
-     * power-user escape hatch for debugging that exact behavior, gated
-     * behind admin-only access the same as every other endpoint here -
-     * always test against disposable data, never something real.
+     * root folder to anything - commands are passed through exactly as
+     * typed, so include the root yourself if a path needs it. It also is
+     * NOT read-only - sub-commands like `del` or `rmdir` would actually
+     * run. This is a deliberate power-user escape hatch for debugging,
+     * gated behind admin-only access the same as every other endpoint
+     * here - always test against disposable data, never something real.
      *
      * @return array{ok:bool, output:string, message:string}
      */
-    public function debugRawCommand(int $mountId, string $rawCommand): array {
+    public function debugRawCommand(int $mountId, string $rawCommand, string $mode = 'c'): array {
         try {
             $mountConfig = $this->globalStoragesService->getStorage($mountId);
             if ($mountConfig === null) {
@@ -1313,13 +1330,31 @@ class MtimeFixService {
                 return ['ok' => false, 'output' => '', 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)'];
             }
 
-            $cmd = sprintf(
-                'smbclient %s -t %d -U %s -c %s 2>&1',
-                escapeshellarg('//' . $host . '/' . $share),
-                self::SMBCLIENT_TIMEOUT_SECONDS,
-                escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
-                escapeshellarg($rawCommand)
-            );
+            $userArg = escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password);
+            $shareArg = escapeshellarg('//' . $host . '/' . $share);
+
+            if ($mode === 'stdin') {
+                // Every line goes through as-is, including any embedded
+                // semicolons - that's the whole point of this mode.
+                $cmd = sprintf(
+                    'echo %s | smbclient %s -t %d -U %s 2>&1',
+                    escapeshellarg($rawCommand),
+                    $shareArg,
+                    self::SMBCLIENT_TIMEOUT_SECONDS,
+                    $userArg
+                );
+            } else {
+                // Real -c usage is a single command - only the first line
+                // of a multi-line box makes sense here.
+                $firstLine = strtok($rawCommand, "\n") ?: $rawCommand;
+                $cmd = sprintf(
+                    'smbclient %s -t %d -U %s -c %s 2>&1',
+                    $shareArg,
+                    self::SMBCLIENT_TIMEOUT_SECONDS,
+                    $userArg,
+                    escapeshellarg($firstLine)
+                );
+            }
 
             exec($cmd, $output, $exitCode);
 

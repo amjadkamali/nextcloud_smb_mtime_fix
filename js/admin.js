@@ -673,6 +673,7 @@
 
         // --- advanced: run a raw smbclient command ------------------------------
 
+        var rawCmdModeRadios = document.querySelectorAll('input[name="smb-mtime-fix-rawcmd-mode"]');
         var rawCmdInput = document.getElementById('smb-mtime-fix-rawcmd-input');
         var rawCmdBtn = document.getElementById('smb-mtime-fix-rawcmd-btn');
         var rawCmdStatus = document.getElementById('smb-mtime-fix-rawcmd-status');
@@ -680,11 +681,22 @@
         var rawCmdExit = document.getElementById('smb-mtime-fix-rawcmd-exit');
         var rawCmdOutput = document.getElementById('smb-mtime-fix-rawcmd-output');
 
+        function getRawCmdMode() {
+            var checked = null;
+            rawCmdModeRadios.forEach(function (r) {
+                if (r.checked) {
+                    checked = r.value;
+                }
+            });
+            return checked || 'c';
+        }
+
         if (rawCmdBtn) {
             rawCmdBtn.addEventListener('click', function () {
                 // Shares the same mount dropdown as the allinfo checker above.
                 var mountId = debugMountSelect ? parseInt(debugMountSelect.value, 10) : 0;
-                var command = rawCmdInput ? rawCmdInput.value.trim() : '';
+                var command = rawCmdInput ? rawCmdInput.value.replace(/\r\n/g, '\n').trim() : '';
+                var mode = getRawCmdMode();
 
                 if (!mountId || !command) {
                     rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Pick a mount and enter a command first.');
@@ -697,7 +709,7 @@
 
                 jsonFetch(apiUrl('/debug-raw'), {
                     method: 'POST',
-                    body: JSON.stringify({ mountId: mountId, command: command }),
+                    body: JSON.stringify({ mountId: mountId, command: command, mode: mode }),
                 })
                     .then(function (data) {
                         rawCmdStatus.textContent = '';

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.11
+- The "Run a raw smbclient command" tool under Advanced now supports two
+  invocation modes, toggled by radio button: the existing `-c` flag
+  (what the real scan/apply code uses today), and a new "piped via
+  stdin" mode (`echo '...' | smbclient ...`) - a different code path
+  that a Samba forum thread reports does not share `-c`'s confirmed
+  `;`-splitting bug, separating multiple commands on newlines instead.
+  The command field is now a multi-line textarea - in stdin mode, each
+  line runs as a separate command; in `-c` mode only the first line is
+  used, matching real `-c` usage. Purely a diagnostic addition - nothing
+  in the real scan/apply/listener code changed, and stdin-piping isn't
+  used anywhere else in the app yet.
+
 ## 0.5.10
 - **Security fix**: confirmed via real-world evidence (a filename
   containing `;`, producing literal "command not found" errors) that
