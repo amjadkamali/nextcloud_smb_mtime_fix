@@ -224,4 +224,26 @@ class AdminController extends Controller {
             return new JSONResponse($this->service->debugAllinfo($mountId, $path));
         });
     }
+
+    /**
+     * Runs a fully arbitrary smbclient `-c` command against one mount, for
+     * testing quoting/escaping/injection behavior directly from the admin
+     * page - see MtimeFixService::debugRawCommand() for the important
+     * caveats (not read-only, doesn't auto-prepend the mount's root).
+     */
+    public function debugRawCommand(): JSONResponse {
+        if ($denied = $this->requireAdmin()) {
+            return $denied;
+        }
+        return $this->runSafely(function () {
+            $mountId = (int)$this->request->getParam('mountId', '0');
+            $command = (string)$this->request->getParam('command', '');
+
+            if ($mountId <= 0 || trim($command) === '') {
+                return new JSONResponse(['ok' => false, 'message' => 'mountId and command are required'], Http::STATUS_BAD_REQUEST);
+            }
+
+            return new JSONResponse($this->service->debugRawCommand($mountId, $command));
+        });
+    }
 }

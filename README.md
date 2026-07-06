@@ -44,12 +44,9 @@ no built-in way to fix this after the fact.
     file again (no extra `smbclient` call); with Database compare, does a
     fresh read, since the scan never took one.
   - **Never move mtime forward** (default on) - refuses to write a
-    timestamp later than the most recently known value for that file. A
-    legitimate fix only ever moves a timestamp backward - a forward move
-    means something unrelated changed the file for real since the scan
-    ran, and writing over it would silently destroy that change. Still
-    checks against a cached value even without live recheck, just less
-    precisely than with a fresh reading.
+    timestamp later than the most recently known value for that file.
+    Checks against a cached value even without live recheck, or against a
+    fresh reading if live recheck ran.
   - Files these two skip are left in the results table with the reason
     shown in a Status column, not silently dropped from the count.
 - **Results table stays a full record**: after applying, fixed rows stay
@@ -118,6 +115,16 @@ are also always written to PHP's native error log as a backstop.
 
 ## Known limitations / things worth verifying on your own setup
 
+- Paths containing `;` or `"` are refused entirely (read or write) -
+  confirmed real-world evidence shows `smbclient`'s own `-c` command
+  parser splits on `;` as a command separator regardless of quoting, so
+  a filename containing one can cause part of it to run as a second,
+  independent smbclient command. `"` is blocked defensively for the same
+  reason (it's the character used to quote paths, and this parser has
+  already shown it doesn't reliably respect quoting). Affected files are
+  simply skipped, logged under the `unsafe_path` message type - not
+  scanned, not written to, on any path (real-time listener, retroactive
+  scan, or retroactive apply).
 - `allinfo` output parsing (used by Live SMB read detection and the
   real-time listener to read a file's actual on-share mtime) has some
   version-to-version drift across Samba/smbclient releases. The plain

@@ -11,5 +11,6 @@ return [
         ['name' => 'admin#getOptions', 'url' => '/options', 'verb' => 'GET'],
         ['name' => 'admin#setOptions', 'url' => '/options', 'verb' => 'POST'],
         ['name' => 'admin#debugAllinfo', 'url' => '/debug-allinfo', 'verb' => 'POST'],
+        ['name' => 'admin#debugRawCommand', 'url' => '/debug-raw', 'verb' => 'POST'],
     ],
 ];

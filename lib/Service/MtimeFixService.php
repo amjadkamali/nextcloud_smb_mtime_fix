@@ -172,11 +172,7 @@ class MtimeFixService {
      * most recent value known for that file (from the live recheck above
      * if it ran, otherwise whatever value the original scan captured -
      * which may be a live smbclient reading or, in 'db' detection mode,
-     * `storage_mtime`). A legitimate fix should only ever move a
-     * timestamp backward (SMB stamps files with upload time, which is
-     * later than the true original) - a forward move means something
-     * unrelated changed the file for real since, and writing over it
-     * would silently destroy that change.
+     * `storage_mtime`).
      */
     public function isNeverMoveForwardEnabled(): bool {
         return $this->config->getAppValue(self::APP_ID, 'never_move_forward_enabled', '1') === '1';
@@ -256,6 +252,7 @@ class MtimeFixService {
     public const MESSAGE_TYPE_TEMP_OFF_UNSUPPORTED = 'temp_off_unsupported';
     public const MESSAGE_TYPE_UNEXPECTED = 'unexpected';
     public const MESSAGE_TYPE_SKIPPED = 'skipped';
+    public const MESSAGE_TYPE_UNSAFE_PATH = 'unsafe_path';
 
     public const CATEGORY_STATUS = 'status';
     public const CATEGORY_ERRORS = 'errors';
@@ -274,6 +271,7 @@ class MtimeFixService {
         self::MESSAGE_TYPE_TEMP_OFF_UNSUPPORTED => self::CATEGORY_ERRORS,
         self::MESSAGE_TYPE_UNEXPECTED => self::CATEGORY_ERRORS,
         self::MESSAGE_TYPE_SKIPPED => self::CATEGORY_SKIPPED,
+        self::MESSAGE_TYPE_UNSAFE_PATH => self::CATEGORY_ERRORS,
     ];
 
     /** Default level per category if the admin hasn't overridden it yet. */
@@ -820,15 +818,10 @@ class MtimeFixService {
             }
 
             if ($neverForwardEnabled && $currentValue !== null && $intendedMtime > $currentValue) {
-                // The SMB bug this app fixes only ever needs a *backward*
-                // correction (upload time is always later than the true
-                // original) - a forward move means something unrelated
-                // changed the file for real since, and writing over it
-                // would silently destroy that change.
                 return $this->skipMismatch(
                     $mismatch['path'],
                     sprintf(
-                        'would move mtime forward (from %s to %s) - skipped to avoid overwriting a newer value',
+                        'would move mtime forward (from %s to %s) - skipped',
                         gmdate('Y-m-d H:i:s', $currentValue) . ' UTC',
                         gmdate('Y-m-d H:i:s', $intendedMtime) . ' UTC'
                     )
@@ -891,6 +884,13 @@ class MtimeFixService {
             'domain' => $domain, 'root' => $root] = $conn;
 
         $smbPath = trim(rtrim($root, '/') . '/' . ltrim($internalPath, '/'), '/');
+
+        $unsafeChar = $this->findUnsafePathCharacter($smbPath);
+        if ($unsafeChar !== null) {
+            $msg = "refusing to write {$smbPath} - contains '{$unsafeChar}', which smbclient's own command parser can misinterpret regardless of quoting";
+            $this->logMessage(self::MESSAGE_TYPE_UNSAFE_PATH, 'nextcloud_smb_mtime_fix: {msg}', ['msg' => $msg]);
+            return ['ok' => false, 'skipped' => false, 'dryRun' => $dryRun, 'message' => $msg];
+        }
 
         // NOTE: verify against your SMB server's expected timezone - adjust
         // to date() (local) instead of gmdate() if utimes ends up off by
@@ -1076,8 +1076,46 @@ class MtimeFixService {
         }
     }
 
+    /**
+     * Characters known or strongly suspected to let a path escape the
+     * single string smbclient's own `-c` command is built from,
+     * regardless of our own (correct) OS-shell escaping - smbclient's
+     * internal parser is the thing that mishandles these, not anything
+     * on our side:
+     *   ';' - CONFIRMED via real-world evidence: smbclient splits on this
+     *         as a command separator even inside quotes, so anything
+     *         after it in a filename runs as a separate command.
+     *   '"' - not independently confirmed the same way, but blocked
+     *         defensively: '"' is the exact character we use to quote
+     *         the path for smbclient, and we've already confirmed this
+     *         parser doesn't reliably respect quoting (see the
+     *         whitespace-in-path findings) - a literal '"' in a filename
+     *         could plausibly break out of our own quoting the same way.
+     * This is a defensive denylist, not a proven-exhaustive one - other
+     * characters could pose similar risks we haven't specifically
+     * confirmed or thought to test.
+     */
+    private const UNSAFE_PATH_CHARACTERS = [';', '"'];
+
+    private function findUnsafePathCharacter(string $path): ?string {
+        foreach (self::UNSAFE_PATH_CHARACTERS as $char) {
+            if (str_contains($path, $char)) {
+                return $char;
+            }
+        }
+        return null;
+    }
+
     private function queryActualMtimeInner(string $host, string $share, string $user, string $password, string $domain, string $root, string $internalPath): ?int {
         $smbPath = trim(rtrim($root, '/') . '/' . ltrim($internalPath, '/'), '/');
+
+        $unsafeChar = $this->findUnsafePathCharacter($smbPath);
+        if ($unsafeChar !== null) {
+            $this->logMessage(self::MESSAGE_TYPE_UNSAFE_PATH, 'nextcloud_smb_mtime_fix: refusing to query {path} - contains {char}, which smbclient\'s own command parser can misinterpret regardless of quoting', [
+                'path' => $smbPath, 'char' => $unsafeChar,
+            ]);
+            return null;
+        }
 
         $result = $this->runAllinfo($host, $share, $user, $password, $domain, $smbPath);
         if (!$result['ok']) {
@@ -1235,5 +1273,64 @@ class MtimeFixService {
             'method' => $method,
             'message' => $message,
         ];
+    }
+
+    /**
+     * Runs a completely arbitrary `-c` command string against one mount,
+     * using this app's stored credentials for it. Exists so quoting/
+     * escaping/injection behavior can be tested directly from the admin
+     * page - without needing a new app release for every variant to try.
+     *
+     * UNLIKE debugAllinfo(): this does NOT prepend the mount's configured
+     * root folder to anything - the command is passed through exactly as
+     * typed, so include the root yourself if your path needs it. It also
+     * is NOT read-only - smbclient sub-commands like `del` or `rmdir`
+     * would actually run, and (per confirmed real-world evidence) a `;`
+     * anywhere in what you type - even inside quotes - gets treated by
+     * smbclient's own parser as a command separator, so whatever follows
+     * it runs as a second, independent command. This is a deliberate
+     * power-user escape hatch for debugging that exact behavior, gated
+     * behind admin-only access the same as every other endpoint here -
+     * always test against disposable data, never something real.
+     *
+     * @return array{ok:bool, output:string, message:string}
+     */
+    public function debugRawCommand(int $mountId, string $rawCommand): array {
+        try {
+            $mountConfig = $this->globalStoragesService->getStorage($mountId);
+            if ($mountConfig === null) {
+                return ['ok' => false, 'output' => '', 'message' => 'mount config not found'];
+            }
+
+            $options = $mountConfig->getBackendOptions();
+            $host = $options['host'] ?? '';
+            $share = $options['share'] ?? '';
+            $user = $options['user'] ?? '';
+            $password = $options['password'] ?? '';
+            $domain = $options['domain'] ?? '';
+
+            if (!function_exists('exec')) {
+                return ['ok' => false, 'output' => '', 'message' => 'exec() is disabled on this PHP install (see disable_functions in php.ini)'];
+            }
+
+            $cmd = sprintf(
+                'smbclient %s -t %d -U %s -c %s 2>&1',
+                escapeshellarg('//' . $host . '/' . $share),
+                self::SMBCLIENT_TIMEOUT_SECONDS,
+                escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
+                escapeshellarg($rawCommand)
+            );
+
+            exec($cmd, $output, $exitCode);
+
+            return [
+                'ok' => $exitCode === 0,
+                'output' => implode("\n", $output),
+                'message' => $exitCode === 0 ? 'smbclient exited with code 0' : ('smbclient exited with code ' . $exitCode),
+            ];
+        } catch (\Throwable $e) {
+            $this->logUnexpectedError('debugRawCommand', $e);
+            return ['ok' => false, 'output' => '', 'message' => 'unexpected error - see log'];
+        }
     }
 }

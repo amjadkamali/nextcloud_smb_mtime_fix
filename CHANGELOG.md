@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.10
+- **Security fix**: confirmed via real-world evidence (a filename
+  containing `;`, producing literal "command not found" errors) that
+  smbclient's own `-c` command parser splits on `;` as a command
+  separator regardless of quoting - anything after it in a path runs as
+  a second, independent smbclient command. Both the read path
+  (`queryActualMtimeInner`, used by scanning and live recheck) and the
+  write path (`applyFixInner`, used by the real-time listener and both
+  retroactive apply flows) now refuse to touch any path containing `;`
+  or `"` (the latter blocked defensively, since it's the character we
+  use to quote paths and this parser has already shown it doesn't
+  reliably respect quoting) - logged under a new `unsafe_path` message
+  type in the Errors category, rather than silently attempting a command
+  that could execute unintended, potentially destructive operations
+  (`del`, `rmdir`, etc.) if part of a filename happened to match a real
+  smbclient command name.
+- Brought back a scoped-down "Run a raw smbclient command" tool under
+  Advanced (mount + command field only) for testing this class of
+  behavior directly - deliberately not subject to the new safety check,
+  since its purpose is to let an admin test exactly these characters on
+  disposable data.
+
 ## 0.5.9
 - Renamed the top log level from "Critical" to "Fatal" - matches
   Nextcloud's own `occ log:manage`/config.php terminology for that level,

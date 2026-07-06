@@ -670,5 +670,48 @@
                     });
             });
         }
+
+        // --- advanced: run a raw smbclient command ------------------------------
+
+        var rawCmdInput = document.getElementById('smb-mtime-fix-rawcmd-input');
+        var rawCmdBtn = document.getElementById('smb-mtime-fix-rawcmd-btn');
+        var rawCmdStatus = document.getElementById('smb-mtime-fix-rawcmd-status');
+        var rawCmdResult = document.getElementById('smb-mtime-fix-rawcmd-result');
+        var rawCmdExit = document.getElementById('smb-mtime-fix-rawcmd-exit');
+        var rawCmdOutput = document.getElementById('smb-mtime-fix-rawcmd-output');
+
+        if (rawCmdBtn) {
+            rawCmdBtn.addEventListener('click', function () {
+                // Shares the same mount dropdown as the allinfo checker above.
+                var mountId = debugMountSelect ? parseInt(debugMountSelect.value, 10) : 0;
+                var command = rawCmdInput ? rawCmdInput.value.trim() : '';
+
+                if (!mountId || !command) {
+                    rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Pick a mount and enter a command first.');
+                    return;
+                }
+
+                rawCmdBtn.disabled = true;
+                rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Running…');
+                rawCmdResult.style.display = 'none';
+
+                jsonFetch(apiUrl('/debug-raw'), {
+                    method: 'POST',
+                    body: JSON.stringify({ mountId: mountId, command: command }),
+                })
+                    .then(function (data) {
+                        rawCmdStatus.textContent = '';
+                        rawCmdResult.style.display = '';
+                        rawCmdExit.textContent = data.message || (data.ok ? t('nextcloud_smb_mtime_fix', 'success') : t('nextcloud_smb_mtime_fix', 'failed'));
+                        rawCmdOutput.textContent = data.output || t('nextcloud_smb_mtime_fix', '(no output)');
+                    })
+                    .catch(function () {
+                        rawCmdStatus.textContent = ' ' + t('nextcloud_smb_mtime_fix', 'Request failed - check the server log.');
+                    })
+                    .finally(function () {
+                        rawCmdBtn.disabled = false;
+                    });
+            });
+        }
     });
 })();

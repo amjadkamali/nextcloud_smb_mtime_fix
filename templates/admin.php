@@ -87,7 +87,7 @@
 
     <h3><?php p($l->t('Find files affected before this app was installed')); ?></h3>
     <p class="settings-hint">
-        <?php p($l->t('Scans your configured SMB mounts and compares each file\'s intended mtime against what\'s actually stamped on the share. Runs in small batches so it can\'t time out on a large share - you can stop it partway and keep whatever it found so far. Both actions respect the dry-run setting above.')); ?>
+        <?php p($l->t('Scans your configured SMB mounts and compares each file\'s intended mtime against what\'s actually stamped on the share. Runs in small batches so it can\'t time out on a large share - you can stop it partway and keep whatever it found so far. Both actions respect the dry-run setting above. If files were added or changed directly on the share outside Nextcloud, run a filesystem scan first (occ files:scan) so Nextcloud\'s own records are current before scanning here.')); ?>
     </p>
 
     <p>
@@ -135,7 +135,7 @@
         <input type="checkbox" id="smb-mtime-fix-never-forward" class="checkbox" <?php p($_['neverForwardEnabled'] ? 'checked' : ''); ?> />
         <label for="smb-mtime-fix-never-forward">
             <strong><?php p($l->t('Never move mtime forward (default)')); ?></strong> &mdash;
-            <?php p($l->t('refuses to write a timestamp later than the most recently known value for that file. A legitimate fix should only ever move a timestamp backward - a forward move means something unrelated changed the file for real since, and writing over it would silently destroy that.')); ?>
+            <?php p($l->t('refuses to write a timestamp later than the most recently known value for that file.')); ?>
         </label>
     </p>
 
@@ -203,6 +203,28 @@
                 <p><strong><?php p($l->t('Line matched:')); ?></strong> <code id="smb-mtime-fix-debug-line"></code></p>
                 <p><strong><?php p($l->t('Raw allinfo output:')); ?></strong></p>
                 <pre id="smb-mtime-fix-debug-raw" style="background: var(--color-background-dark, #f0f0f0); padding: 0.75em; overflow-x: auto; white-space: pre-wrap; border-radius: 4px;"></pre>
+            </div>
+
+            <hr/>
+
+            <h4><?php p($l->t('Run a raw smbclient command')); ?></h4>
+            <p class="settings-hint">
+                <strong><?php p($l->t('Not read-only.')); ?></strong>
+                <?php p($l->t('Runs exactly what you type as smbclient\'s -c command, using the selected mount\'s stored credentials. It will actually execute whatever you enter, including destructive sub-commands (del, rmdir, etc) - use a disposable test file/folder, never something real. Does NOT automatically add the mount\'s configured root folder to your path - include it yourself if needed.')); ?>
+            </p>
+            <p>
+                <label for="smb-mtime-fix-rawcmd-input"><?php p($l->t('Command (e.g. allinfo "some/path"):')); ?></label><br/>
+                <input type="text" id="smb-mtime-fix-rawcmd-input" class="input" style="width: 100%; max-width: 600px;" placeholder='allinfo "some/path/to/file.ext"' />
+            </p>
+            <button id="smb-mtime-fix-rawcmd-btn" class="button">
+                <?php p($l->t('Run command')); ?>
+            </button>
+            <span id="smb-mtime-fix-rawcmd-status"></span>
+
+            <div id="smb-mtime-fix-rawcmd-result" style="display:none; margin-top: 1em;">
+                <p><strong><?php p($l->t('Exit status:')); ?></strong> <span id="smb-mtime-fix-rawcmd-exit"></span></p>
+                <p><strong><?php p($l->t('Output:')); ?></strong></p>
+                <pre id="smb-mtime-fix-rawcmd-output" style="background: var(--color-background-dark, #f0f0f0); padding: 0.75em; overflow-x: auto; white-space: pre-wrap; border-radius: 4px;"></pre>
             </div>
             <?php endif; ?>
         </div>
