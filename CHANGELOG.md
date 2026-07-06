@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.12
+- **Migrated the real read and write paths from smbclient's `-c` flag to
+  stdin-piping** (`echo '...' | smbclient ...`) - `runAllinfo()` (scanning,
+  live recheck) and `applyFixInner()` (the real-time listener and both
+  retroactive apply flows). This is a genuine fix, not a workaround:
+  `-c` splits on `;` as a command separator regardless of quoting, with
+  no escape able to prevent it (confirmed via real-world evidence and
+  independently by others); stdin-piped commands were confirmed - against
+  a real file, in this app's own testing - not to share that bug.
+- Correspondingly, **paths containing `;` are no longer refused** - the
+  actual bug they were being blocked for is fixed at the source. Paths
+  containing `"` are still refused as a defensive precaution; that one
+  was never confirmed the same rigorous way, and switching invocation
+  methods doesn't retroactively confirm it.
+- The diagnostic "Run a raw smbclient command" tool under Advanced keeps
+  its `-c` mode available (alongside the stdin mode used to find this
+  fix) purely for comparison testing - it's the only place `-c` is still
+  used anywhere in the app.
+
 ## 0.5.11
 - The "Run a raw smbclient command" tool under Advanced now supports two
   invocation modes, toggled by radio button: the existing `-c` flag

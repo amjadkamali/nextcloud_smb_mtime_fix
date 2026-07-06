@@ -894,8 +894,8 @@ class MtimeFixService {
 
         // NOTE: verify against your SMB server's expected timezone - adjust
         // to date() (local) instead of gmdate() if utimes ends up off by
-        // your UTC offset. Test on one file first with
-        // `smbclient -c "allinfo <path>"` before trusting this broadly.
+        // your UTC offset. Use the "Test allinfo parsing" tool under
+        // Advanced on the admin page to check on one file first.
         $smbTime = gmdate('Y:m:d-H:i:s', $intendedMtime);
         $fromSuffix = $previousMtime !== null ? (' from ' . gmdate('Y-m-d H:i:s', $previousMtime) . ' UTC') : '';
 
@@ -915,11 +915,11 @@ class MtimeFixService {
         }
 
         $cmd = sprintf(
-            'smbclient %s -t %d -U %s -c %s 2>&1',
+            'echo %s | smbclient %s -t %d -U %s 2>&1',
+            escapeshellarg(sprintf('utimes "%s" -1 -1 %s -1', $smbPath, $smbTime)),
             escapeshellarg('//' . $host . '/' . $share),
             self::SMBCLIENT_TIMEOUT_SECONDS,
-            escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
-            escapeshellarg(sprintf('utimes "%s" -1 -1 %s -1', $smbPath, $smbTime))
+            escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password)
         );
 
         exec($cmd, $output, $exitCode);
@@ -1078,24 +1078,27 @@ class MtimeFixService {
 
     /**
      * Characters known or strongly suspected to let a path escape the
-     * single string smbclient's own `-c` command is built from,
-     * regardless of our own (correct) OS-shell escaping - smbclient's
-     * internal parser is the thing that mishandles these, not anything
-     * on our side:
-     *   ';' - CONFIRMED via real-world evidence: smbclient splits on this
-     *         as a command separator even inside quotes, so anything
-     *         after it in a filename runs as a separate command.
-     *   '"' - not independently confirmed the same way, but blocked
-     *         defensively: '"' is the exact character we use to quote
-     *         the path for smbclient, and we've already confirmed this
-     *         parser doesn't reliably respect quoting (see the
-     *         whitespace-in-path findings) - a literal '"' in a filename
-     *         could plausibly break out of our own quoting the same way.
-     * This is a defensive denylist, not a proven-exhaustive one - other
-     * characters could pose similar risks we haven't specifically
+     * single string smbclient is fed, regardless of our own (correct)
+     * OS-shell escaping - smbclient's internal parser/reader is the thing
+     * that mishandles these, not anything on our side:
+     *   '"' - not independently confirmed, but blocked defensively: '"'
+     *         is the exact character used to quote the path, and this
+     *         parser has already shown it doesn't reliably respect
+     *         quoting (see the whitespace-in-path findings) - a literal
+     *         '"' in a filename could plausibly break out of that quoting
+     *         the same way.
+     * ';' was blocked here too until this app's write/read paths moved
+     * to sending commands via stdin (`echo '...' | smbclient ...`)
+     * instead of the `-c` flag - `-c` splits on `;` as a command
+     * separator regardless of quoting, confirmed via real-world evidence,
+     * with no escape able to prevent it; stdin-piped commands were
+     * confirmed (against a real file, in this app's own testing) not to
+     * share that bug, so `;` no longer needs to be refused.
+     * This remains a defensive denylist, not a proven-exhaustive one -
+     * other characters could pose similar risks we haven't specifically
      * confirmed or thought to test.
      */
-    private const UNSAFE_PATH_CHARACTERS = [';', '"'];
+    private const UNSAFE_PATH_CHARACTERS = ['"'];
 
     private function findUnsafePathCharacter(string $path): ?string {
         foreach (self::UNSAFE_PATH_CHARACTERS as $char) {
@@ -1143,6 +1146,12 @@ class MtimeFixService {
      * same file - the diagnostic tool can't tell you something different
      * from what the real scan actually does.
      *
+     * Sent via stdin (`echo '...' | smbclient ...`) rather than smbclient's
+     * `-c` flag - confirmed (independently, and again against a real file
+     * in this app's own testing) that `-c` splits on `;` as a command
+     * separator regardless of quoting, with no escape able to prevent it,
+     * while stdin-piped commands don't share that bug.
+     *
      * @return array{ok:bool, output:list<string>, message:string}
      */
     private function runAllinfo(string $host, string $share, string $user, string $password, string $domain, string $smbPath): array {
@@ -1151,11 +1160,11 @@ class MtimeFixService {
         }
 
         $cmd = sprintf(
-            'smbclient %s -t %d -U %s -c %s 2>&1',
+            'echo %s | smbclient %s -t %d -U %s 2>&1',
+            escapeshellarg(sprintf('allinfo "%s"', $smbPath)),
             escapeshellarg('//' . $host . '/' . $share),
             self::SMBCLIENT_TIMEOUT_SECONDS,
-            escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password),
-            escapeshellarg(sprintf('allinfo "%s"', $smbPath))
+            escapeshellarg(($domain !== '' ? $domain . '\\' : '') . $user . '%' . $password)
         );
 
         exec($cmd, $output, $exitCode);

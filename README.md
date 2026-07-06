@@ -115,16 +115,21 @@ are also always written to PHP's native error log as a backstop.
 
 ## Known limitations / things worth verifying on your own setup
 
-- Paths containing `;` or `"` are refused entirely (read or write) -
-  confirmed real-world evidence shows `smbclient`'s own `-c` command
-  parser splits on `;` as a command separator regardless of quoting, so
-  a filename containing one can cause part of it to run as a second,
-  independent smbclient command. `"` is blocked defensively for the same
-  reason (it's the character used to quote paths, and this parser has
-  already shown it doesn't reliably respect quoting). Affected files are
-  simply skipped, logged under the `unsafe_path` message type - not
-  scanned, not written to, on any path (real-time listener, retroactive
-  scan, or retroactive apply).
+- Commands are sent to `smbclient` via stdin (`echo '...' | smbclient ...`)
+  rather than its `-c` flag - confirmed real-world evidence shows `-c`
+  splits on `;` as a command separator regardless of quoting, so a
+  filename containing one could cause part of it to run as a second,
+  independent smbclient command, with no escape able to prevent it.
+  Stdin-piped commands were confirmed (against a real file) not to share
+  that bug. Paths containing `"` are still refused entirely (read or
+  write) as a defensive precaution - `"` is the character used to quote
+  paths, and this parser has already shown it doesn't reliably respect
+  quoting, so a literal `"` in a filename could plausibly break out of it
+  the same way `;` did - this hasn't been independently confirmed the
+  same rigorous way, just blocked out of caution. Affected files are
+  logged under the `unsafe_path` message type - not scanned, not written
+  to, on any path (real-time listener, retroactive scan, or retroactive
+  apply).
 - `allinfo` output parsing (used by Live SMB read detection and the
   real-time listener to read a file's actual on-share mtime) has some
   version-to-version drift across Samba/smbclient releases. The plain
